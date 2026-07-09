@@ -281,6 +281,24 @@ def save_from_flat(flat, data):
         else:
             sec["events"] = [map_event(k) for k in kids]
 
+    # 색상 자동 배정: 색을 고르지 않은('자동') 프로젝트/일정에
+    # 가장 적게 쓰인 팔레트 색을 부여해 전체가 골고루 정돈되게 한다.
+    palette = list(data.get("colors", {}).keys())
+    if palette:
+        usage = {k: 0 for k in palette}
+        targets = []
+        for sec in data["sections"]:
+            for obj in sec.get("projects", []) + sec.get("events", []):
+                c = obj.get("color")
+                if c in usage:
+                    usage[c] += 1
+                elif not c:
+                    targets.append(obj)
+        for obj in targets:
+            pick = min(palette, key=lambda k: (usage[k], palette.index(k)))
+            obj["color"] = pick
+            usage[pick] += 1
+
     data["last_updated"] = today_iso
     return data
 
@@ -581,6 +599,15 @@ APP_HTML = r'''<!DOCTYPE html>
   }
   .color-dot:hover { transform: scale(1.15); }
   .color-dot.selected { box-shadow: 0 0 0 2px #fff, 0 0 0 4px #4f46e5; }
+  .color-dot.color-auto {
+    background: conic-gradient(#4f46e5, #0891b2, #059669, #d97706, #dc2626, #4f46e5);
+    position: relative;
+  }
+  .color-dot.color-auto::after {
+    content: "A"; position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 11px; font-weight: 700; text-shadow: 0 1px 2px rgba(0,0,0,0.45);
+  }
   .color-dot.color-add {
     background: transparent; border: 2px dashed #cbd5e1; color: #9ca3af;
     text-align: center; line-height: 20px; font-weight: 700; font-size: 14px;
@@ -1203,8 +1230,12 @@ gantt.form_blocks["colorpick"] = {
   render: function(sns) {
     var html = "<div class='gantt_cal_ltext colorpick-block'>";
     COLOR_OPTS.forEach(function(c) {
-      html += "<span class='color-dot' data-key='" + c.key + "' title='" + (c.key || "기본") +
-              "' style='background:" + (c.bg || "#9ca3af") + "'></span>";
+      if (!c.key) {
+        html += "<span class='color-dot color-auto' data-key='' title='자동 — 저장 시 가장 적게 쓰인 색이 배정됩니다'></span>";
+      } else {
+        html += "<span class='color-dot' data-key='" + c.key + "' title='" + c.key +
+                "' style='background:" + (c.bg || "#9ca3af") + "'></span>";
+      }
     });
     html += "<span class='color-dot color-add' title='새 색상 추가'>+</span>" +
             "<input type='color' class='color-input' value='#7c3aed' style='display:none'></div>";
