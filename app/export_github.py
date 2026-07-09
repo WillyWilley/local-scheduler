@@ -75,14 +75,17 @@ def main():
         f.write(PUBLIC_GITIGNORE)
     copied.append(".gitignore")
 
-    # 이중 안전장치: 금지 항목이 결과물에 섞였는지 전체 검사
+    # 이중 안전장치: 커밋될 수 있는 위치에 금지 항목이 섞였는지 검사.
+    # (.git 내부와, 공개용 .gitignore가 이미 차단하는 로컬 실행 흔적
+    #  — logs/, output/, data/schedule_data.json 등 — 은 제외)
     leaked = []
+    ignored_dirs = FORBIDDEN_DIRS | {".git", "backups"}
     for root, dirs, files in os.walk(target):
-        dirs[:] = [d for d in dirs if d != ".git"]  # push용 저장소 내부는 제외
-        for d in list(dirs):
-            if d in FORBIDDEN_DIRS:
-                leaked.append(os.path.join(root, d))
+        dirs[:] = [d for d in dirs if d not in ignored_dirs]
+        rel_root = os.path.relpath(root, target)
         for fn in files:
+            if fn == "schedule_data.json" and rel_root == "data":
+                continue  # 로컬 실행용 (gitignore로 커밋 차단됨)
             if fn in FORBIDDEN_NAMES or fn == "app.log" or (fn.startswith("app-") and fn.endswith(".log")):
                 leaked.append(os.path.join(root, fn))
     if leaked:
