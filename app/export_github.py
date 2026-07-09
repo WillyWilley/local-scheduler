@@ -35,6 +35,7 @@ PUBLIC_FILES = [
     "app/schedule_editor.py",
     "app/export_github.py",
     "data/schedule_data.sample.json",
+    "docs/screenshot.png",
 ]
 
 # 공개 저장소용 .gitignore (개인 데이터가 커밋되지 않도록)
@@ -49,8 +50,9 @@ data/schedule_data.json
 """
 
 # 절대 포함되면 안 되는 것들 (이중 안전장치 — 결과물 전체를 검사)
+# 대상 폴더의 .git은 push용 저장소이므로 검사에서 제외 (내부는 살피지 않음)
 FORBIDDEN_NAMES = {"schedule_data.json", "업무_스케줄.html", "구글캘린더_관리.md"}
-FORBIDDEN_DIRS = {"backups", "logs", "output", ".git"}
+FORBIDDEN_DIRS = {"backups", "logs", "output"}
 
 
 def main():
@@ -76,6 +78,7 @@ def main():
     # 이중 안전장치: 금지 항목이 결과물에 섞였는지 전체 검사
     leaked = []
     for root, dirs, files in os.walk(target):
+        dirs[:] = [d for d in dirs if d != ".git"]  # push용 저장소 내부는 제외
         for d in list(dirs):
             if d in FORBIDDEN_DIRS:
                 leaked.append(os.path.join(root, d))

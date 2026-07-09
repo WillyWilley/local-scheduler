@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-07-01",
+  "last_updated": "2026-07-09",
   "colors": {
     "alpha": {
       "bg": "#4f46e5",
@@ -12,6 +12,10 @@
     "gamma": {
       "bg": "#d97706",
       "border": "#b45309"
+    },
+    "delta": {
+      "bg": "#059669",
+      "border": "#047857"
     }
   },
   "sections": [
@@ -22,37 +26,52 @@
       "projects": [
         {
           "id": 1,
-          "title": "프로젝트 A",
+          "title": "신제품 개발",
           "color": "alpha",
           "sub_projects": [
             {
               "id": 11,
-              "title": "1단계: 조사·분석",
+              "title": "기획·설계",
               "tasks": [
                 {
                   "id": 111,
-                  "title": "자료 조사",
-                  "start": "2026-07-01",
+                  "title": "시장 조사",
+                  "start": "2026-06-22",
                   "duration": 5,
                   "progress": 0,
-                  "notes": "선행 연구 정리"
+                  "notes": "경쟁 제품 3종 비교"
                 },
                 {
                   "id": 112,
-                  "title": "분석 보고서 작성",
-                  "start": "2026-07-08",
-                  "duration": 8,
+                  "title": "요구사항 정의서 작성",
+                  "start": "2026-06-29",
+                  "duration": 4,
                   "progress": 0
+                },
+                {
+                  "id": 113,
+                  "title": "상세 설계",
+                  "start": "2026-07-06",
+                  "duration": 8,
+                  "progress": 0,
+                  "notes": "설계 리뷰 7/16 예정"
                 }
               ]
             },
             {
               "id": 12,
-              "title": "2단계: 실행",
+              "title": "시제품 제작",
               "tasks": [
                 {
                   "id": 121,
-                  "title": "시제품 제작",
+                  "title": "부품 발주",
+                  "start": "2026-07-13",
+                  "duration": 3,
+                  "progress": 0
+                },
+                {
+                  "id": 122,
+                  "title": "조립 및 1차 시험",
                   "start": "2026-07-20",
                   "duration": 10,
                   "progress": 0
@@ -63,15 +82,39 @@
         },
         {
           "id": 2,
-          "title": "프로젝트 B",
+          "title": "연구 과제 보고서",
           "color": "beta",
           "sub_projects": [
             {
               "id": 21,
-              "title": "정기 운영 업무",
+              "title": "중간 보고서 작성",
               "tasks": [],
               "start": "2026-07-01",
-              "duration": 60,
+              "duration": 12,
+              "progress": 0,
+              "notes": "제출 마감 7/17"
+            },
+            {
+              "id": 22,
+              "title": "데이터 분석 자동화",
+              "tasks": [],
+              "start": "2026-07-08",
+              "duration": 20,
+              "progress": 0
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "title": "정기 운영 업무",
+          "color": "delta",
+          "sub_projects": [
+            {
+              "id": 51,
+              "title": "주간 장비 점검",
+              "tasks": [],
+              "start": "2026-06-01",
+              "duration": 90,
               "progress": 0
             }
           ]
@@ -98,6 +141,22 @@
           "duration": 1,
           "time": "14:00~16:00",
           "color": "gamma"
+        },
+        {
+          "id": 6,
+          "title": "외부 자문 회의",
+          "start": "2026-07-21",
+          "duration": 1,
+          "time": "13:30~15:00",
+          "color": "beta"
+        },
+        {
+          "id": 7,
+          "title": "팀 워크숍",
+          "start": "2026-07-24",
+          "duration": 2,
+          "color": "delta",
+          "notes": "1박 2일, 장소 미정"
         }
       ]
     }
