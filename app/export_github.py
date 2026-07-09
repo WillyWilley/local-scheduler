@@ -47,6 +47,7 @@ logs/
 output/
 data/backups/
 data/schedule_data.json
+data/holidays_cache.json
 """
 
 # 절대 포함되면 안 되는 것들 (이중 안전장치 — 결과물 전체를 검사)

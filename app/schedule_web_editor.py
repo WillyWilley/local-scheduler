@@ -202,13 +202,17 @@ def save_from_flat(flat, data):
         sch = leaf_schedule(node)
         if sch:
             obj["start"], obj["duration"] = sch
-            # '미정' 해제는 클라이언트가 명시적으로 해제한 경우만
-            # (미정이면서 예상 날짜가 저장된 항목이 저장만으로 확정되지 않도록)
-            if not node.get("custom_status"):
+            # 미정 지정/해제는 클라이언트의 custom_status를 그대로 따른다
+            # (미정 + 예상 날짜 공존 가능; 편집창의 '날짜 미정' 체크로 토글)
+            if node.get("custom_status") == "undetermined":
+                obj["status"] = "undetermined"
+            else:
                 obj.pop("status", None)
         else:
             obj.pop("start", None)
             obj.pop("duration", None)
+            if node.get("custom_status") == "undetermined":
+                obj["status"] = "undetermined"
 
     def map_task(node):
         obj = get_or_new(node)
@@ -734,6 +738,7 @@ gantt.locale = {
     section_evtime: "시간 (예: 10:00~11:30)",
     section_color: "색상 테마",
     section_donebox: "완료 처리",
+    section_undetbox: "일정 확정 여부",
     section_notes: "메모",
     column_text: "업무명", column_start_date: "시작", column_duration: "기간", column_add: "",
     type_task: "업무", type_project: "프로젝트", type_milestone: "마일스톤",
@@ -1262,6 +1267,22 @@ gantt.form_blocks["donetoggle"] = {
   focus: function(node) {}
 };
 
+// ── 커스텀 컨트롤: 날짜 미정 토글 ──
+gantt.form_blocks["undettoggle"] = {
+  render: function(sns) {
+    return "<div class='gantt_cal_ltext done-block'>" +
+      "<label class='done-toggle'><input type='checkbox' class='undet-check'>" +
+      "<span>날짜 미정 (기간은 예상 일정으로만 보관)</span></label></div>";
+  },
+  set_value: function(node, value, task) {
+    node.querySelector(".undet-check").checked = (value === "undetermined");
+  },
+  get_value: function(node, task) {
+    return node.querySelector(".undet-check").checked ? "undetermined" : "";
+  },
+  focus: function(node) {}
+};
+
 // ── 라이트박스: 항목 종류에 따라 필드 구성 ──
 function setLightbox(kind, hasKids) {
   var secs = [
@@ -1273,6 +1294,7 @@ function setLightbox(kind, hasKids) {
   if (kind === "event") secs.push({ name: "evtime", height: 40, map_to: "custom_time", type: "timerange" });
   if (kind === "event" || kind === "project") secs.push({ name: "color", height: 44, map_to: "color_key", type: "colorpick" });
   if (!hasKids) secs.push({ name: "donebox", height: 34, map_to: "done", type: "donetoggle" });
+  if (!hasKids && kind !== "event") secs.push({ name: "undetbox", height: 34, map_to: "custom_status", type: "undettoggle" });
   secs.push({ name: "notes", height: 72, map_to: "notes", type: "textarea" });
   gantt.config.lightbox.sections = secs;
   gantt.config.lightbox.project_sections = secs;
@@ -1318,10 +1340,11 @@ gantt.attachEvent("onAfterTaskDrag", function(id) {
   gantt.refreshTask(id);
 });
 gantt.attachEvent("onLightboxSave", function(id, task) {
-  // 날짜를 직접 지정할 수 있는 잎 항목만 '미정' 해제 (부모는 롤업 유지)
+  // 잎 항목: 날짜가 지정되므로 unscheduled 해제.
+  // '미정' 여부는 편집창의 체크박스(custom_status 매핑)를 그대로 따른다.
   if (!gantt.hasChild(id)) {
     task.unscheduled = false;
-    delete task.custom_status;
+    if (!task.custom_status) delete task.custom_status;
   }
   if (task.kind === "event") normalizeEventType(task);
   else fixNoon(task);
@@ -1737,7 +1760,7 @@ def render_app():
     html = html.replace("{{COLOR_OPTS}}", json.dumps(color_opts, ensure_ascii=False))
     html = html.replace("{{COLOR_CSS}}", bs.build_color_css(data.get("colors", {})))
     html = html.replace("{{LAST_UPDATED}}", data.get("last_updated", ""))
-    html = html.replace("{{HOLIDAYS}}", json.dumps(bs.HOLIDAYS, ensure_ascii=False))
+    html = html.replace("{{HOLIDAYS}}", json.dumps(bs.load_holidays(), ensure_ascii=False))
     html = html.replace("{{DATA_TOKEN}}", data_token())
     html = html.replace("{{APP_VERSION}}", APP_VERSION)
     # 로컬 자산이 없으면(공개 저장소에서 갓 받은 경우 등) CDN으로 폴백
@@ -2053,6 +2076,14 @@ def main():
     print(f"  주소: {url}")
     print("  서버는 백그라운드 상주합니다 (다음 실행은 창만 열어 즉시).")
     print("=" * 50)
+
+    def _holiday_refresh():
+        try:
+            bs.refresh_holidays()
+        except Exception as e:
+            print(f"공휴일 자동 갱신 실패 (캐시/내장 데이터로 동작): {e}")
+
+    threading.Thread(target=_holiday_refresh, daemon=True).start()  # 공휴일 자동 갱신
     threading.Timer(0.2, open_app_window, [url]).start()
     try:
         server.serve_forever()

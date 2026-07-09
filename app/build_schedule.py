@@ -24,8 +24,11 @@ def ensure_data_file():
         shutil.copyfile(SAMPLE_FILE, DATA_FILE)
         print("schedule_data.json이 없어 예시 데이터로 시작합니다.")
 
-# 한국 공휴일 {날짜: 이름} (표시용 — 근무일 계산에는 미반영. 필요 시 여기서 추가/수정)
-HOLIDAYS = {
+HOLIDAY_CACHE = os.path.join(BASE_DIR, "data", "holidays_cache.json")
+
+# 한국 공휴일 {날짜: 이름} — 내장 폴백 데이터.
+# 실제 표시는 load_holidays()가 [자동 갱신 캐시 > 내장] 순으로 병합해 사용.
+HOLIDAYS_BUILTIN = {
     "2026-01-01": "신정",
     "2026-02-16": "설날", "2026-02-17": "설날", "2026-02-18": "설날",
     "2026-03-01": "삼일절", "2026-03-02": "대체휴일",
@@ -49,6 +52,78 @@ HOLIDAYS = {
     "2027-10-09": "한글날", "2027-10-11": "대체휴일",
     "2027-12-25": "성탄절", "2027-12-27": "대체휴일",
 }
+
+# API 이름이 길 때 달력 칸에 맞게 줄이는 표
+HOLIDAY_SHORT_NAMES = {
+    "부처님 오신 날": "석탄일",
+    "부처님오신날": "석탄일",
+    "기독탄신일": "성탄절",
+    "크리스마스": "성탄절",
+    "1월 1일": "신정",
+    "새해": "신정",
+    "대체 휴일": "대체휴일",
+    "대체공휴일": "대체휴일",
+    "제헌절": "제헌절",
+}
+
+
+def _short_holiday_name(name):
+    name = str(name).strip()
+    if name in HOLIDAY_SHORT_NAMES:
+        return HOLIDAY_SHORT_NAMES[name]
+    return name[:5] if len(name) > 5 else name
+
+
+def load_holidays():
+    """공휴일 병합: 자동 갱신 캐시가 있으면 내장 데이터 위에 덮어쓴다."""
+    merged = dict(HOLIDAYS_BUILTIN)
+    try:
+        with open(HOLIDAY_CACHE, "r", encoding="utf-8") as f:
+            cache = json.load(f)
+        merged.update(cache.get("holidays", {}))
+    except (OSError, ValueError):
+        pass
+    return merged
+
+
+def refresh_holidays(force=False):
+    """공휴일 자동 갱신 (무료 공개 API, 키 불필요).
+    캐시가 없거나 30일 넘게 오래됐거나 내년 데이터가 빠졌을 때만 네트워크 호출.
+    실패해도 캐시/내장 데이터로 동작하므로 오프라인에서도 안전."""
+    import urllib.request
+
+    today = datetime.now()
+    try:
+        with open(HOLIDAY_CACHE, "r", encoding="utf-8") as f:
+            cache = json.load(f)
+        fetched = datetime.strptime(cache.get("fetched", "2000-01-01"), "%Y-%m-%d")
+        has_next_year = any(k.startswith(str(today.year + 1)) for k in cache.get("holidays", {}))
+        if not force and has_next_year and (today - fetched).days < 30:
+            return False  # 아직 신선함
+    except (OSError, ValueError):
+        pass  # 캐시 없음 → 받아온다
+
+    holidays = {}
+    for year in range(today.year - 1, today.year + 3):
+        url = f"https://date.nager.at/api/v3/PublicHolidays/{year}/KR"
+        with urllib.request.urlopen(url, timeout=10) as r:
+            for item in json.loads(r.read().decode("utf-8")):
+                date = item.get("date")
+                types = item.get("types") or ["Public"]
+                if date and "Public" in types:
+                    holidays[date] = _short_holiday_name(item.get("localName") or item.get("name") or "공휴일")
+
+    if len(holidays) < 10:  # 응답이 비정상적으로 빈약하면 캐시를 덮지 않음
+        raise ValueError(f"공휴일 응답이 너무 적음 ({len(holidays)}건)")
+
+    os.makedirs(os.path.dirname(HOLIDAY_CACHE), exist_ok=True)
+    tmp = HOLIDAY_CACHE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"fetched": today.strftime("%Y-%m-%d"), "holidays": holidays},
+                  f, ensure_ascii=False, indent=2)
+    os.replace(tmp, HOLIDAY_CACHE)
+    print(f"공휴일 데이터 자동 갱신: {len(holidays)}건 ({today.year - 1}~{today.year + 2}년)")
+    return True
 
 
 def iso_to_gantt(date_str: str, time: str = "00:00") -> str:
@@ -900,7 +975,7 @@ def main():
     html = html.replace("{{GANTT_DATA}}", gantt_json)
     html = html.replace("{{COLOR_CSS}}", color_css)
     html = html.replace("{{LAST_UPDATED}}", last_updated)
-    html = html.replace("{{HOLIDAYS}}", json.dumps(HOLIDAYS, ensure_ascii=False))
+    html = html.replace("{{HOLIDAYS}}", json.dumps(load_holidays(), ensure_ascii=False))
 
     # 원자적 쓰기: 재빌드 도중 프로세스가 종료돼도 공유용 HTML이 절반만 남지 않도록
     os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
@@ -913,6 +988,10 @@ def main():
     print(f"  - 섹션: {len(data['sections'])}개")
     print(f"  - Gantt 항목: {len(gantt_items)}개")
     print(f"  - 업데이트: {last_updated}")
+
+    next_year = datetime.now().year + 1
+    if not any(k.startswith(str(next_year)) for k in load_holidays()):
+        print(f"  ! 공휴일 데이터에 {next_year}년이 아직 없습니다 (앱 실행 시 자동 갱신됩니다)")
 
 
 if __name__ == "__main__":

@@ -6,3 +6,4 @@ logs/
 output/
 data/backups/
 data/schedule_data.json
+data/holidays_cache.json
