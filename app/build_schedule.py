@@ -1,0 +1,919 @@
+# -*- coding: utf-8 -*-
+"""
+업무 스케줄 빌드 스크립트
+schedule_data.json → 업무_스케줄.html 생성
+
+사용법: python build_schedule.py
+"""
+import json
+import os
+from datetime import datetime, timedelta
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))   # app/
+BASE_DIR = os.path.dirname(SCRIPT_DIR)                     # 프로젝트 루트
+DATA_FILE = os.path.join(BASE_DIR, "data", "schedule_data.json")
+SAMPLE_FILE = os.path.join(BASE_DIR, "data", "schedule_data.sample.json")
+OUTPUT_FILE = os.path.join(BASE_DIR, "output", "업무_스케줄.html")
+
+
+def ensure_data_file():
+    """데이터 파일이 없으면 예시 데이터로 시작 (처음 받아서 실행하는 사람용)"""
+    if not os.path.exists(DATA_FILE) and os.path.exists(SAMPLE_FILE):
+        import shutil
+        os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
+        shutil.copyfile(SAMPLE_FILE, DATA_FILE)
+        print("schedule_data.json이 없어 예시 데이터로 시작합니다.")
+
+# 한국 공휴일 {날짜: 이름} (표시용 — 근무일 계산에는 미반영. 필요 시 여기서 추가/수정)
+HOLIDAYS = {
+    "2026-01-01": "신정",
+    "2026-02-16": "설날", "2026-02-17": "설날", "2026-02-18": "설날",
+    "2026-03-01": "삼일절", "2026-03-02": "대체휴일",
+    "2026-05-05": "어린이날",
+    "2026-05-24": "석탄일", "2026-05-25": "대체휴일",
+    "2026-06-06": "현충일",
+    "2026-08-15": "광복절", "2026-08-17": "대체휴일",
+    "2026-09-24": "추석", "2026-09-25": "추석", "2026-09-26": "추석", "2026-09-28": "대체휴일",
+    "2026-10-03": "개천절", "2026-10-05": "대체휴일",
+    "2026-10-09": "한글날",
+    "2026-12-25": "성탄절",
+    "2027-01-01": "신정",
+    "2027-02-06": "설날", "2027-02-07": "설날", "2027-02-08": "설날", "2027-02-09": "대체휴일",
+    "2027-03-01": "삼일절",
+    "2027-05-05": "어린이날",
+    "2027-05-13": "석탄일",
+    "2027-06-06": "현충일",
+    "2027-08-15": "광복절", "2027-08-16": "대체휴일",
+    "2027-09-14": "추석", "2027-09-15": "추석", "2027-09-16": "추석",
+    "2027-10-03": "개천절", "2027-10-04": "대체휴일",
+    "2027-10-09": "한글날", "2027-10-11": "대체휴일",
+    "2027-12-25": "성탄절", "2027-12-27": "대체휴일",
+}
+
+
+def iso_to_gantt(date_str: str, time: str = "00:00") -> str:
+    """YYYY-MM-DD → DD-MM-YYYY HH:MM (dhtmlxgantt 형식)"""
+    d = datetime.strptime(date_str, "%Y-%m-%d")
+    return d.strftime("%d-%m-%Y") + " " + time
+
+
+def workday_end_date(start_dt: datetime, work_days: int) -> datetime:
+    """시작일부터 주말(토·일) 제외 work_days일째 되는 날.
+    시작일은 주말이어도 항상 1일째로 포함."""
+    d = start_dt
+    count = 1
+    while count < int(work_days):
+        d += timedelta(days=1)
+        if d.weekday() < 5:
+            count += 1
+    return d
+
+
+def workdays_between(start_dt: datetime, end_dt: datetime) -> int:
+    """시작~끝(포함) 중 주말(토·일) 제외 일수 (시작일은 항상 포함)"""
+    count = 1
+    d = start_dt
+    while d < end_dt:
+        d += timedelta(days=1)
+        if d.weekday() < 5:
+            count += 1
+    return count
+
+
+def gantt_date(d: datetime) -> str:
+    return d.strftime("%d-%m-%Y 00:00")
+
+
+def build_gantt_data(data: dict) -> list:
+    """계층 JSON → dhtmlxgantt 플랫 배열 변환
+
+    바 표시 규칙(멘탈 모델): 날짜는 잎(업무·이벤트·자식 없는 항목)에만 입력한다.
+    자식이 있는 프로젝트/세부 프로젝트는 자식 범위로 자동 계산(롤업)되며,
+    직접 입력된 일정은 무시된다. 전부 완료된 가지는 접힌 상태로 표시.
+    """
+    items = []
+    today = datetime.now().date()
+
+    def leaf_span(obj):
+        """start/duration이 입력된 항목의 (시작일, 마지막날) datetime 쌍"""
+        if obj.get("start") and obj.get("duration"):
+            s = datetime.strptime(obj["start"], "%Y-%m-%d")
+            return s, workday_end_date(s, obj["duration"])
+        return None
+
+    def apply_span(item, span):
+        s, e = span
+        item["start_date"] = gantt_date(s)
+        item["end_date"] = gantt_date(e + timedelta(days=1))  # gantt end_date는 배타적
+        item["work_days"] = workdays_between(s, e)
+
+    def apply_rollup(item, spans):
+        """자식 범위들의 합집합으로 부모 일정 계산
+        (접기·완료 표시는 호출부에서 is_done 기준으로 결정)"""
+        s = min(sp[0] for sp in spans)
+        e = max(sp[1] for sp in spans)
+        apply_span(item, (s, e))
+        item["done_count"] = sum(1 for sp in spans if sp[1].date() < today)
+        item["child_count"] = len(spans)
+        return s, e
+
+    def obj_last_day(obj):
+        """항목(자식 포함)의 가장 늦은 종료일. 미정 자식은 제외. 날짜 없으면 None."""
+        ends = []
+        for t in obj.get("tasks", []):
+            if t.get("status") == "undetermined":
+                continue
+            sp = leaf_span(t)
+            if sp:
+                ends.append(sp[1])
+        for s in obj.get("sub_projects", []):
+            if s.get("status") == "undetermined":
+                continue
+            e = obj_last_day(s)
+            if e:
+                ends.append(e)
+        if not ends:
+            sp = leaf_span(obj)
+            if sp:
+                ends.append(sp[1])
+        return max(ends) if ends else None
+
+    def is_done(obj):
+        """완료 여부: done 플래그가 있거나 마지막 종료일이 오늘 이전.
+        자식이 있으면 (미정 제외한) 자식 전부 완료 시 완료. 미정 자식이 하나라도
+        있으면 아직 끝난 가지가 아니므로 미완료. (날짜 없음도 미완료 취급)"""
+        if obj.get("status") == "undetermined":
+            return False
+        all_kids = list(obj.get("tasks", [])) + list(obj.get("sub_projects", []))
+        if all_kids:
+            if any(k.get("status") == "undetermined" for k in all_kids):
+                return False
+            return all(is_done(k) for k in all_kids)
+        if obj.get("done"):
+            return True
+        e = obj_last_day(obj)
+        return e is not None and e.date() < today
+
+    def done_last(objs):
+        """미완료 먼저, 완료는 아래로 (같은 그룹 안에서는 원래 순서 유지)"""
+        return sorted(objs, key=is_done)
+
+    for section in data["sections"]:
+        sec_id = section["id"]
+        sec_type = section["type"]
+
+        # 섹션 헤더
+        items.append({
+            "id": sec_id,
+            "text": section["title"],
+            "type": "project",
+            "open": True,
+            "is_section": sec_type,
+            "unscheduled": True,
+        })
+
+        if sec_type == "project":
+            for proj in done_last(section.get("projects", [])):
+                color = proj.get("color", "")
+                color_class = f"color-{color}" if color else ""
+
+                proj_item = {
+                    "id": proj["id"],
+                    "text": proj["title"],
+                    "parent": sec_id,
+                    "open": True,
+                    "color_class": color_class,
+                    "is_parent_project": True,
+                }
+                if proj.get("notes"):
+                    proj_item["notes"] = proj["notes"]
+                proj_children = []
+                proj_spans = []
+
+                for sub in done_last(proj.get("sub_projects", [])):
+                    sub_item = {
+                        "id": sub["id"],
+                        "text": sub["title"],
+                        "parent": proj["id"],
+                        "open": True,
+                        "is_sub_project": True,
+                        "color_class": color_class,
+                    }
+                    if sub.get("notes"):
+                        sub_item["notes"] = sub["notes"]
+
+                    task_items = []
+                    task_spans = []
+                    for task in done_last(sub.get("tasks", [])):
+                        t_item = {
+                            "id": task["id"],
+                            "text": task["title"],
+                            "parent": sub["id"],
+                            "progress": task.get("progress", 0),
+                            "color_class": color_class,
+                            "bar_level": 3,
+                        }
+                        t_span = leaf_span(task)
+                        if t_span:
+                            apply_span(t_item, t_span)
+                        else:
+                            t_item["unscheduled"] = True  # 저장 시 임의 날짜 부여 방지
+                        if task.get("status") == "undetermined":
+                            t_item["custom_status"] = "undetermined"
+                        elif t_span:
+                            task_spans.append(t_span)
+                        if task.get("notes"):
+                            t_item["notes"] = task["notes"]
+                        if task.get("done"):
+                            t_item["done"] = True
+                        task_items.append(t_item)
+
+                    own_span = leaf_span(sub)
+                    if task_spans:
+                        # 자식이 있으면 항상 롤업 — 직접 입력된 일정은 무시
+                        span = apply_rollup(sub_item, task_spans)
+                        sub_item["bar_level"] = 2
+                        if is_done(sub):  # done 플래그·날짜 모두 반영해 접기/완료 처리
+                            sub_item["open"] = False
+                            sub_item["done"] = True
+                        if own_span:
+                            print(f"  ! '{sub['title']}' 직접 입력 일정 무시됨 (자식 범위로 자동 계산)")
+                        proj_spans.append(span)
+                        # '상자' 밴드: 세부 프로젝트 범위를 자신+자식 행에 표시
+                        if color:
+                            band_start = int(span[0].strftime("%Y%m%d"))
+                            band_end = int(span[1].strftime("%Y%m%d"))
+                            for band_item in [sub_item] + task_items:
+                                band_item["band_start"] = band_start
+                                band_item["band_end"] = band_end
+                                band_item["band_theme"] = color
+                    elif own_span:
+                        # 자식이 없으면 잎으로 취급 (실색 바)
+                        apply_span(sub_item, own_span)
+                        sub_item["bar_level"] = 3
+                        sub_item["progress"] = sub.get("progress", 0)
+                        if sub.get("done"):
+                            sub_item["done"] = True
+                        if sub.get("status") == "undetermined":
+                            sub_item["custom_status"] = "undetermined"
+                        else:
+                            proj_spans.append(own_span)
+                    else:
+                        sub_item["unscheduled"] = True
+                        if sub.get("status") == "undetermined" or sub.get("tasks"):
+                            # 직접 미정 지정 또는 자식 전부 미정이면 미정 표시
+                            sub_item["custom_status"] = "undetermined"
+
+                    proj_children.append(sub_item)
+                    proj_children.extend(task_items)
+
+                own_span = leaf_span(proj)
+                if proj_spans:
+                    apply_rollup(proj_item, proj_spans)
+                    proj_item["bar_level"] = 1
+                    if is_done(proj):
+                        proj_item["open"] = False
+                        proj_item["done"] = True
+                    if own_span:
+                        print(f"  ! '{proj['title']}' 직접 입력 일정 무시됨 (자식 범위로 자동 계산)")
+                elif own_span:
+                    apply_span(proj_item, own_span)
+                    proj_item["bar_level"] = 3
+                    proj_item["progress"] = proj.get("progress", 0)
+                    if proj.get("done"):
+                        proj_item["done"] = True
+                    if proj.get("status") == "undetermined":
+                        proj_item["custom_status"] = "undetermined"
+                else:
+                    proj_item["unscheduled"] = True
+                    if proj.get("status") == "undetermined" or proj.get("sub_projects"):
+                        proj_item["custom_status"] = "undetermined"
+
+                items.append(proj_item)
+                items.extend(proj_children)
+
+        elif sec_type == "event":
+            def build_evt_item(evt, parent_id):
+                color = evt.get("color", "")
+                color_class = f"color-{color}" if color else ""
+                item = {
+                    "id": evt["id"],
+                    "text": evt["title"],
+                    "parent": parent_id,
+                    "start_date": iso_to_gantt(evt["start"]),
+                    "work_days": evt["duration"],
+                    "is_single_event": True,
+                    "color_class": color_class,
+                    "bar_level": 3,
+                }
+                if int(evt.get("duration", 1)) <= 1:
+                    item["type"] = "milestone"  # 하루짜리 일정은 다이아몬드
+                    # 정오로 지정해 다이아몬드가 날짜 칸 정중앙에 오도록
+                    item["start_date"] = iso_to_gantt(evt["start"], "12:00")
+                else:
+                    # 일회성 일정은 주말 포함 달력일 기준 (행사는 주말에도 열림)
+                    s = datetime.strptime(evt["start"], "%Y-%m-%d")
+                    e = s + timedelta(days=int(evt["duration"]) - 1)
+                    apply_span(item, (s, e))
+                if evt.get("time"):
+                    item["custom_time"] = evt["time"]
+                if evt.get("notes"):
+                    item["notes"] = evt["notes"]
+                if evt.get("done"):
+                    item["done"] = True
+                return item
+
+            def evt_last_day(evt):
+                s = datetime.strptime(evt["start"], "%Y-%m-%d")
+                return s + timedelta(days=(int(evt.get("duration", 1)) or 1) - 1)
+
+            def evt_done(evt):
+                return bool(evt.get("done")) or evt_last_day(evt).date() < today
+
+            events = section.get("events", [])
+            upcoming = [e for e in events if not evt_done(e)]
+            past = [e for e in events if evt_done(e)]
+
+            upcoming.sort(key=lambda e: (e["start"], e.get("time", "")))  # 가까운 일정부터
+            for evt in upcoming:
+                items.append(build_evt_item(evt, sec_id))
+
+            # 지나간 일정은 접힌 그룹으로 모아 목록 맨 아래에 표시
+            if past:
+                past.sort(key=lambda e: e["start"], reverse=True)  # 최근 것부터
+                past_id = f"{sec_id}-past"
+                items.append({
+                    "id": past_id,
+                    "text": f"🗂 지난 일정 ({len(past)})",
+                    "parent": sec_id,
+                    "type": "project",
+                    "open": False,
+                    "is_past_group": True,
+                    "unscheduled": True,
+                })
+                for evt in past:
+                    items.append(build_evt_item(evt, past_id))
+
+    return items
+
+
+def hex_to_rgba(hex_color: str, alpha: float) -> str:
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def build_color_css(colors: dict) -> str:
+    """색상 정의 → CSS 문자열 (<style> 태그 안에 삽입용)
+
+    레벨별 바 스타일: 업무/이벤트=실색, 세부 프로젝트=반투명 채움+실선 테두리,
+    프로젝트=진한색 브래킷(양끝 캡은 ::before/::after)"""
+    lines = []
+    for name, c in colors.items():
+        cls = f"color-{name}"
+        bg, border = c["bg"], c["border"]
+        lines.append(f"  .gantt_task_line.{cls} {{ background: {bg} !important; border-color: {border} !important; }}")
+        # 세부 프로젝트: 실색 채움 + inset shadow 윤곽선
+        lines.append(f"  .gantt_task_line.{cls}.lv-subproject {{ background: {bg} !important; box-shadow: inset 0 0 0 2px {border}; }}")
+        # 프로젝트: 진한 실색
+        lines.append(f"  .gantt_task_line.{cls}.lv-project {{ background: {border} !important; border-color: {border} !important; }}")
+        # '상자' 밴드: 세부 프로젝트 범위만큼 자식 행 배경을 연하게 물들임
+        lines.append(f"  .gantt_task_cell.range-band.band-{name} {{ background: {hex_to_rgba(bg, 0.07)}; }}")
+        lines.append(f"  .gantt_task_cell.weekend.range-band.band-{name} {{ background: {hex_to_rgba(bg, 0.13)} !important; }}")
+    return "\n".join(lines)
+
+
+HTML_TEMPLATE = r'''<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>업무 스케줄</title>
+<script src="https://cdn.dhtmlx.com/gantt/edge/dhtmlxgantt.js"></script>
+<link href="https://cdn.dhtmlx.com/gantt/edge/dhtmlxgantt.css" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    font-family: 'Noto Sans KR', sans-serif;
+    background: #f5f7fa;
+  }
+
+  .page-header {
+    background: #fff;
+    border-bottom: 1px solid #e5e7eb;
+    padding: 14px 28px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    height: 64px;
+    box-sizing: border-box;
+  }
+
+  .page-header h1 { font-size: 20px; font-weight: 700; color: #1a1a2e; margin: 0; }
+  .page-header .subtitle { font-size: 12px; color: #6b7280; margin-top: 2px; }
+
+  .header-controls { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+  .header-controls button {
+    padding: 6px 14px; border: 1px solid #e5e7eb; border-radius: 6px;
+    background: #fff; color: #374151; font-family: inherit;
+    font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.15s;
+  }
+  .header-controls button:hover { border-color: #4f46e5; color: #4f46e5; }
+  .header-controls button.active { background: #4f46e5; color: #fff; border-color: #4f46e5; }
+
+  #gantt_here { width: 100%; height: calc(100% - 64px); }
+
+  .gantt_container { font-family: 'Noto Sans KR', sans-serif !important; }
+  .gantt_grid_head_cell { font-weight: 600 !important; font-size: 12px !important; color: #6b7280 !important; }
+  .gantt_cell, .gantt_tree_content { font-size: 13px !important; }
+
+  .project-row { font-weight: 600 !important; background: #f8f9fb !important; }
+  .sub-project-row { font-weight: 500 !important; }
+  .undetermined-row { opacity: 0.55; font-style: italic; }
+
+  .section-row { background: #eef2ff !important; font-weight: 700 !important; border-top: 2px solid #c7d2fe !important; }
+  .section-row .gantt_tree_content { color: #4338ca !important; font-size: 14px !important; letter-spacing: 0.5px; }
+  .section-row-event { background: #fef3c7 !important; font-weight: 700 !important; border-top: 2px solid #fcd34d !important; }
+  .section-row-event .gantt_tree_content { color: #92400e !important; font-size: 14px !important; letter-spacing: 0.5px; }
+
+  .single-event-row .gantt_tree_content { padding-left: 10px !important; }
+
+  /* 지난 일정 그룹 (접힌 보관함) */
+  .past-group-row { background: #f9fafb !important; }
+  .past-group-row .gantt_tree_content { color: #9ca3af !important; font-size: 12px !important; font-weight: 500; }
+
+  .gantt_task_line.hide-bar { display: none !important; }
+  .section-row .gantt_task_line { display: none !important; }
+
+  /* ── 3단 바 위계 (두께는 전부 동일, 채움 방식으로만 구분):
+     프로젝트=진한 실색·각진 모서리 / 세부=윤곽선+연한 채움 / 업무=실색·둥근 모서리 ── */
+  .gantt_task_line { box-sizing: border-box !important; }
+
+  .gantt_task_line.lv-project {
+    border-radius: 2px;
+    border-width: 0;
+    background: #6b7280;
+  }
+  .gantt_task_line.lv-project .gantt_task_progress_wrapper,
+  .gantt_task_line.lv-project .gantt_task_content { display: none; }
+
+  /* 세부 프로젝트: 테두리는 inset shadow로 그려 실색 바와 픽셀 폭 완전 일치 */
+  .gantt_task_line.lv-subproject {
+    border-radius: 3px; border: none !important;
+    background: #9ca3af;
+    box-shadow: inset 0 0 0 2px #6b7280;
+  }
+  .gantt_task_line.lv-subproject .gantt_task_progress_wrapper { display: none; }
+
+  .gantt_task_line.lv-task { border-radius: 4px; }
+
+  .gantt_side_content {
+    font-size: 11px; color: #6b7280;
+    max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  /* ── 완료 항목: 뒤로 물러남 (형태 유지, 채도·불투명도만 낮춤) ── */
+  .gantt_task_line.is-done { filter: grayscale(0.7); opacity: 0.58; }
+  .gantt_row.done-row .gantt_tree_content,
+  .gantt_row.done-row .gantt_cell { color: #9ca3af !important; }
+  .gantt_row.done-row.leaf-row .gantt_tree_content { text-decoration: line-through; }
+
+  .weekend { background: #eceef2 !important; }
+  .gantt_scale_cell.weekend { font-weight: 600; }
+  .gantt_scale_cell.weekend.saturday { color: #2563eb !important; }
+  .gantt_scale_cell.weekend.sunday { color: #dc2626 !important; }
+  .gantt_scale_cell.holiday { background: rgba(220,38,38,0.08) !important; color: #dc2626 !important; font-weight: 600; }
+  .gantt_scale_cell.holiday .hd { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; line-height: 1.2; }
+  .gantt_scale_cell.holiday .hd-d { font-size: 12px; font-weight: 700; }
+  .gantt_scale_cell.holiday .hd-n { font-size: 9px; letter-spacing: -0.5px; white-space: nowrap; font-weight: 600; }
+  .gantt_task_cell.holiday { background: rgba(220,38,38,0.06) !important; }
+  .gantt_task_cell.holiday.range-band { background: rgba(220,38,38,0.10) !important; }
+  .gantt_task_cell.today { background: #e0e7ff !important; }
+
+  .status-badge {
+    display: inline-block; font-size: 10px; padding: 1px 6px;
+    border-radius: 10px; font-weight: 500; margin-left: 4px; vertical-align: middle;
+  }
+  .status-in-progress { background: #dbeafe; color: #1d4ed8; }
+  .status-upcoming { background: #f3f4f6; color: #6b7280; }
+  .status-undetermined { background: #fef3c7; color: #92400e; }
+
+  /* 프로젝트별 색상 (빌드 시 자동 생성) */
+{{COLOR_CSS}}
+</style>
+</head>
+<body>
+
+<div class="page-header">
+  <div>
+    <h1>업무 스케줄</h1>
+    <div class="subtitle">마지막 업데이트: {{LAST_UPDATED}}</div>
+  </div>
+  <div class="header-controls">
+    <button data-scale="day" class="active">일간</button>
+    <button data-scale="week">주간</button>
+    <button data-scale="month">월간</button>
+    <span style="width:1px;height:20px;background:#d1d5db;margin:0 4px;"></span>
+    <button data-range="1" class="active">1개월</button>
+    <button data-range="3">3개월</button>
+    <button data-range="6">6개월</button>
+    <button data-range="12">1년</button>
+    <span style="width:1px;height:20px;background:#d1d5db;margin:0 4px;"></span>
+    <button onclick="collapseAll()">전체 접기</button>
+    <button onclick="expandAll()">전체 펼치기</button>
+    <span style="width:1px;height:20px;background:#d1d5db;margin:0 4px;"></span>
+    <button id="toggleDone" onclick="toggleDone()">완료 숨기기</button>
+  </div>
+</div>
+
+<div id="gantt_here"></div>
+
+<script>
+// 한글 로케일
+gantt.locale = {
+  date: {
+    month_full: ["1월","2월","3월","4월","5월","6월","7월","8월","9월","10월","11월","12월"],
+    month_short: ["1월","2월","3월","4월","5월","6월","7월","8월","9월","10월","11월","12월"],
+    day_full: ["일요일","월요일","화요일","수요일","목요일","금요일","토요일"],
+    day_short: ["일","월","화","수","목","금","토"]
+  },
+  labels: {
+    new_task: "새 업무", icon_save: "저장", icon_cancel: "취소", icon_details: "상세",
+    icon_edit: "편집", icon_delete: "삭제", confirm_closing: "",
+    confirm_deleting: "정말 삭제하시겠습니까?",
+    section_description: "설명", section_time: "기간",
+    column_wbs: "WBS", column_text: "업무명",
+    column_start_date: "시작일", column_duration: "기간", column_add: "",
+    type_task: "업무", type_project: "프로젝트", type_milestone: "마일스톤",
+    minutes: "분", hours: "시간", days: "일", weeks: "주", months: "월", years: "년"
+  }
+};
+
+try { gantt.plugins({ tooltip: true }); } catch(e) {}
+
+gantt.config.date_format = "%d-%m-%Y %H:%i";
+gantt.config.open_tree_initially = false;  // open 값은 빌드 시 지정 (완료 가지는 접힘)
+gantt.config.show_progress = true;
+gantt.config.row_height = 38;
+gantt.config.bar_height = 24;
+gantt.config.scale_height = 64;
+gantt.config.min_column_width = 56;
+gantt.config.readonly = true;
+gantt.config.autofit = false;
+
+// 상태 자동 판별 함수
+function getTaskStatus(task) {
+  if (task.is_section || task.type === gantt.config.types.project) return '';
+  if (task.custom_status === 'undetermined') return 'undetermined';
+  if (task.done) return 'completed';
+  var today = new Date(); today.setHours(0,0,0,0);
+  var start = task.start_date ? new Date(task.start_date) : null;
+  var end = task.end_date ? new Date(task.end_date) : null;
+  if (start) start.setHours(0,0,0,0);
+  if (end) end.setHours(0,0,0,0);
+  if (start && end) {
+    // end는 배타적(마지막날+1). 마일스톤은 end==start라 하루로 보정
+    if (end.getTime() <= start.getTime()) { end = new Date(start); end.setDate(end.getDate() + 1); }
+    if (today < start) return 'upcoming';
+    if (today < end) return 'in-progress';
+    return 'completed';
+  }
+  return '';
+}
+function escHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+// 주말 제외 근무일 수 (시작일은 항상 1일째로 포함, end는 배타적)
+function workDaysBetween(start, end) {
+  var n = 1;
+  var d = new Date(start.getTime());
+  d.setDate(d.getDate() + 1);
+  while (d < end) {
+    var wd = d.getDay();
+    if (wd !== 0 && wd !== 6) n++;
+    d.setDate(d.getDate() + 1);
+  }
+  return n;
+}
+
+// 컬럼
+gantt.config.columns = [
+  { name: "text", label: "업무명", tree: true, width: 300, resize: true },
+  { name: "status", label: "상태", align: "center", width: 60,
+    template: function(task) {
+      var st = getTaskStatus(task);
+      if (st === 'in-progress') return '<span class="status-badge status-in-progress">진행중</span>';
+      if (st === 'upcoming') return '<span class="status-badge status-upcoming">예정</span>';
+      if (st === 'undetermined') return '<span class="status-badge status-undetermined">미정</span>';
+      if (st === 'completed') return '<span class="status-badge" style="background:#e8efe9;color:#6b7280;">완료</span>';
+      return '';
+    }
+  },
+  { name: "start_date", label: "시작", align: "center", width: 100,
+    template: function(task) {
+      if (task.is_section || task.is_past_group) return "";
+      return gantt.templates.date_grid(task.start_date, task);
+    }
+  },
+  { name: "duration", label: "기간(일)", align: "center", width: 90,
+    template: function(task) {
+      if (task.is_section || task.is_past_group) return "";
+      if (task.is_single_event && task.start_date && task.end_date) {
+        var d = Math.round((task.end_date - task.start_date) / 86400000);
+        return d || 1;  // 일회성 일정은 주말 포함 달력일
+      }
+      if (task.work_days !== undefined) return task.work_days;
+      if (task.start_date && task.end_date) return workDaysBetween(task.start_date, task.end_date);
+      return task.duration;
+    }
+  },
+  { name: "notes", label: "메모", width: 160, resize: true,
+    template: function(task) {
+      if (!task.notes) return '';
+      var short = task.notes.replace(/\n/g, ' ');
+      if (short.length > 25) short = short.substring(0, 25) + '...';
+      return '<span style="font-size:11px;color:#6b7280" title="' + escHtml(task.notes).replace(/\n/g, '&#10;') + '">' + escHtml(short) + '</span>';
+    }
+  }
+];
+
+// 스케일
+gantt.config.scales = [
+  { unit: "month", step: 1, format: "%Y년 %M" },
+  { unit: "day", step: 1, format: dayScaleFormat }
+];
+
+var scaleConfigs = {
+  day: {
+    scale_height: 64, min_column_width: 56,
+    scales: [
+      { unit: "month", step: 1, format: "%Y년 %M" },
+      { unit: "day", step: 1, format: dayScaleFormat }
+    ]
+  },
+  week: {
+    scale_height: 56, min_column_width: 80,
+    scales: [
+      { unit: "month", step: 1, format: "%Y년 %M" },
+      { unit: "week", step: 1, format: "%W주차" }
+    ]
+  },
+  month: {
+    scale_height: 56, min_column_width: 60,
+    scales: [
+      { unit: "year", step: 1, format: "%Y년" },
+      { unit: "month", step: 1, format: "%M" }
+    ]
+  }
+};
+
+function setScale(level) {
+  var cfg = scaleConfigs[level];
+  gantt.config.scale_height = cfg.scale_height;
+  gantt.config.min_column_width = cfg.min_column_width;
+  gantt.config.scales = cfg.scales;
+  gantt.render();
+}
+
+// 주말 + 공휴일
+var HOLIDAYS = {{HOLIDAYS}};  // {날짜: 이름}
+function holidayName(date) {
+  var k = date.getFullYear() + "-" + ("0" + (date.getMonth() + 1)).slice(-2) + "-" + ("0" + date.getDate()).slice(-2);
+  return HOLIDAYS[k] || "";
+}
+function isHoliday(date) { return !!holidayName(date); }
+function dayScaleFormat(date) {
+  var h = holidayName(date);
+  if (h) return "<div class='hd'><span class='hd-d'>" + date.getDate() + "</span><span class='hd-n'>" + h + "</span></div>";
+  return date.getDate() + "(" + gantt.locale.date.day_short[date.getDay()] + ")";
+}
+gantt.templates.scale_cell_class = function(date) {
+  if (isHoliday(date)) return "holiday";
+  if (date.getDay() === 0) return "weekend sunday";
+  if (date.getDay() === 6) return "weekend saturday";
+  return "";
+};
+gantt.templates.timeline_cell_class = function(item, date) {
+  var cls = "";
+  if (isHoliday(date)) cls = "holiday";
+  else if (date.getDay() === 0 || date.getDay() === 6) cls = "weekend";
+  if (item.band_start) {
+    var ymd = date.getFullYear() * 10000 + (date.getMonth() + 1) * 100 + date.getDate();
+    if (ymd >= item.band_start && ymd <= item.band_end) {
+      cls += " range-band band-" + item.band_theme;
+    }
+  }
+  var t = new Date();
+  if (date.getFullYear() === t.getFullYear() && date.getMonth() === t.getMonth() && date.getDate() === t.getDate()) {
+    cls += " today";
+  }
+  return cls;
+};
+
+// 행 스타일
+gantt.templates.grid_row_class = function(start, end, task) {
+  var cls = [];
+  if (task.is_section === 'project') cls.push("section-row");
+  else if (task.is_section === 'event') cls.push("section-row-event");
+  else if (task.is_parent_project) cls.push("project-row");
+  if (task.is_past_group) cls.push("past-group-row");
+  if (task.is_sub_project) cls.push("sub-project-row");
+  if (task.is_single_event) cls.push("single-event-row");
+  if (task.custom_status === 'undetermined') cls.push("undetermined-row");
+  if (getTaskStatus(task) === 'completed') {
+    cls.push("done-row");
+    if (task.bar_level === 3) cls.push("leaf-row");  // 취소선은 잎에만
+  }
+  return cls.join(" ");
+};
+gantt.templates.task_row_class = function(start, end, task) {
+  var cls = [];
+  if (task.is_section === 'project') cls.push("section-row");
+  else if (task.is_section === 'event') cls.push("section-row-event");
+  if (task.is_single_event) cls.push("single-event-row");
+  if (task.custom_status === 'undetermined') cls.push("undetermined-row");
+  return cls.join(" ");
+};
+
+// 바 위 텍스트 숨기기
+gantt.templates.task_text = function(start, end, task) { return ""; };
+
+// 바 오른쪽 텍스트: 마일스톤만 일정명 표시
+gantt.templates.rightside_text = function(start, end, task) {
+  if (task.type === "milestone") {
+    return escHtml(task.text) + (task.custom_time ? " · " + escHtml(task.custom_time) : "");
+  }
+  return "";
+};
+
+// 바 색상 + 레벨 위계 + 완료 처리
+gantt.templates.task_class = function(start, end, task) {
+  if (task.is_section || task.is_past_group) return "hide-bar";
+  var cls = task.color_class || "";
+  if (task.bar_level === 1) cls += " lv-project";
+  else if (task.bar_level === 2) cls += " lv-subproject";
+  else if (task.type !== "milestone") cls += " lv-task";
+  if (task.custom_status === 'undetermined') cls += " hide-bar";
+  if (getTaskStatus(task) === 'completed') cls += " is-done";
+  return cls;
+};
+
+// 툴팁
+try {
+  gantt.templates.tooltip_date_format = gantt.date.date_to_str("%Y-%m-%d");
+  gantt.templates.tooltip_text = function(start, end, task) {
+    var h = "<b>" + escHtml(task.text) + "</b><br>";
+    if (task.custom_status === 'undetermined') {
+      h += "기간: 미정";
+    } else {
+      h += "시작: " + gantt.templates.tooltip_date_format(start) + "<br>";
+      h += "종료: " + gantt.templates.tooltip_date_format(end);
+    }
+    if (task.custom_time) h += "<br>시간: " + escHtml(task.custom_time);
+    if (task.notes) h += "<br><br><b>메모:</b><br>" + escHtml(task.notes).replace(/\n/g, "<br>");
+    return h;
+  };
+} catch(e) {}
+
+// 초기화
+gantt.init("gantt_here");
+
+// 오늘 표시선
+gantt.attachEvent("onGanttRender", function() {
+  var today = new Date();
+  var areaEl = document.querySelector(".gantt_task");
+  if (!areaEl) return;
+  var old = document.getElementById("today_line");
+  if (old) old.remove();
+  var pos = gantt.posFromDate(today);
+  if (pos > 0) {
+    var line = document.createElement("div");
+    line.id = "today_line";
+    line.style.cssText = "position:absolute;top:0;left:"+pos+"px;width:2px;height:100%;background:#4f46e5;opacity:0.5;z-index:5;pointer-events:none;";
+    areaEl.appendChild(line);
+  }
+});
+
+// ============ 데이터 (빌드 시 자동 생성) ============
+gantt.parse({
+  data: {{GANTT_DATA}},
+  links: []
+});
+
+// 완료 숨기기 토글: 하위까지 전부 완료된 최상위 프로젝트/지나간 일정만 숨김
+// (진행 중인 프로젝트 안의 완료된 업무는 맥락 유지를 위해 계속 흐리게 표시)
+var hideDone = localStorage.getItem('hideDone') === '1';
+function updateDoneBtn() {
+  var b = document.getElementById('toggleDone');
+  if (b) b.classList.toggle('active', hideDone);
+}
+function toggleDone() {
+  hideDone = !hideDone;
+  localStorage.setItem('hideDone', hideDone ? '1' : '0');
+  updateDoneBtn();
+  gantt.render();
+}
+updateDoneBtn();
+gantt.attachEvent("onBeforeTaskDisplay", function(id, task) {
+  if (!hideDone) return true;
+  if (task.is_past_group) return false;
+  var t = task;
+  while (t) {
+    if ((t.is_parent_project || t.is_single_event) && getTaskStatus(t) === 'completed') return false;
+    var p = t.parent;
+    t = (p && p != gantt.config.root_id && gantt.isTaskExists(p)) ? gantt.getTask(p) : null;
+  }
+  return true;
+});
+
+// 범위 조절 (스케일 자동 전환 + 자유 스크롤)
+var rangeScaleMap = { 1: 'day', 3: 'week', 6: 'week', 12: 'month' };
+function setRange(months) {
+  // 스케일 자동 전환
+  var autoScale = rangeScaleMap[months] || 'day';
+  var cfg = scaleConfigs[autoScale];
+  gantt.config.scale_height = cfg.scale_height;
+  gantt.config.min_column_width = cfg.min_column_width;
+  gantt.config.scales = cfg.scales;
+  // 날짜 제한 해제 → 자유 스크롤
+  gantt.config.start_date = null;
+  gantt.config.end_date = null;
+  // 스케일 버튼 active 동기화
+  document.querySelectorAll('[data-scale]').forEach(function(b) { b.classList.remove('active'); });
+  var activeBtn = document.querySelector('[data-scale="' + autoScale + '"]');
+  if (activeBtn) activeBtn.classList.add('active');
+  gantt.render();
+  // 오늘로 스크롤
+  gantt.showDate(new Date());
+}
+setRange(1);
+
+// 스케일 전환
+document.querySelectorAll('[data-scale]').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    document.querySelectorAll('[data-scale]').forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    gantt.config.start_date = null;
+    gantt.config.end_date = null;
+    setScale(btn.dataset.scale);
+    gantt.showDate(new Date());
+  });
+});
+
+// 범위 전환
+document.querySelectorAll('[data-range]').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    document.querySelectorAll('[data-range]').forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    setRange(parseInt(btn.dataset.range));
+  });
+});
+
+function collapseAll() {
+  gantt.eachTask(function(t) { t.$open = false; });
+  gantt.render();
+}
+function expandAll() {
+  gantt.eachTask(function(t) { t.$open = true; });
+  gantt.render();
+}
+</script>
+</body>
+</html>'''
+
+
+def main():
+    ensure_data_file()
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    gantt_items = build_gantt_data(data)
+    # "</script>" 포함 텍스트가 페이지를 깨뜨리지 않도록 이스케이프
+    gantt_json = json.dumps(gantt_items, ensure_ascii=False, indent=4).replace("</", "<\\/")
+    color_css = build_color_css(data.get("colors", {}))
+    last_updated = data.get("last_updated", datetime.now().strftime("%Y-%m-%d"))
+
+    html = HTML_TEMPLATE
+    html = html.replace("{{GANTT_DATA}}", gantt_json)
+    html = html.replace("{{COLOR_CSS}}", color_css)
+    html = html.replace("{{LAST_UPDATED}}", last_updated)
+    html = html.replace("{{HOLIDAYS}}", json.dumps(HOLIDAYS, ensure_ascii=False))
+
+    # 원자적 쓰기: 재빌드 도중 프로세스가 종료돼도 공유용 HTML이 절반만 남지 않도록
+    os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
+    tmp = OUTPUT_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(html)
+    os.replace(tmp, OUTPUT_FILE)
+
+    print(f"빌드 완료: {OUTPUT_FILE}")
+    print(f"  - 섹션: {len(data['sections'])}개")
+    print(f"  - Gantt 항목: {len(gantt_items)}개")
+    print(f"  - 업데이트: {last_updated}")
+
+
+if __name__ == "__main__":
+    main()

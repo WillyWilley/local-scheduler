@@ -1,0 +1,105 @@
+{
+  "last_updated": "2026-07-01",
+  "colors": {
+    "alpha": {
+      "bg": "#4f46e5",
+      "border": "#4338ca"
+    },
+    "beta": {
+      "bg": "#0891b2",
+      "border": "#0e7490"
+    },
+    "gamma": {
+      "bg": "#d97706",
+      "border": "#b45309"
+    }
+  },
+  "sections": [
+    {
+      "id": "sec-proj",
+      "title": "📋 장기 업무",
+      "type": "project",
+      "projects": [
+        {
+          "id": 1,
+          "title": "프로젝트 A",
+          "color": "alpha",
+          "sub_projects": [
+            {
+              "id": 11,
+              "title": "1단계: 조사·분석",
+              "tasks": [
+                {
+                  "id": 111,
+                  "title": "자료 조사",
+                  "start": "2026-07-01",
+                  "duration": 5,
+                  "progress": 0,
+                  "notes": "선행 연구 정리"
+                },
+                {
+                  "id": 112,
+                  "title": "분석 보고서 작성",
+                  "start": "2026-07-08",
+                  "duration": 8,
+                  "progress": 0
+                }
+              ]
+            },
+            {
+              "id": 12,
+              "title": "2단계: 실행",
+              "tasks": [
+                {
+                  "id": 121,
+                  "title": "시제품 제작",
+                  "start": "2026-07-20",
+                  "duration": 10,
+                  "progress": 0
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "title": "프로젝트 B",
+          "color": "beta",
+          "sub_projects": [
+            {
+              "id": 21,
+              "title": "정기 운영 업무",
+              "tasks": [],
+              "start": "2026-07-01",
+              "duration": 60,
+              "progress": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sec-event",
+      "title": "📌 일회성 일정",
+      "type": "event",
+      "events": [
+        {
+          "id": 3,
+          "title": "킥오프 회의",
+          "start": "2026-07-02",
+          "duration": 1,
+          "time": "10:00~11:00",
+          "color": "alpha"
+        },
+        {
+          "id": 4,
+          "title": "월간 세미나",
+          "start": "2026-07-15",
+          "duration": 1,
+          "time": "14:00~16:00",
+          "color": "gamma"
+        }
+      ]
+    }
+  ]
+}
