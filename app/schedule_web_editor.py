@@ -1816,7 +1816,40 @@ function copyBriefing() {
   navigator.clipboard.writeText(briefText).then(function() { showToast("브리핑이 복사되었습니다"); });
 }
 
-// (서버는 백그라운드 상주 — 창을 닫아도 유지되어 다음 실행이 즉시 열림)
+// ── 서버 감시: 서버가 죽으면 창도 자동으로 닫고, 새 버전이면 자동 새로고침 ──
+var pingFails = 0;
+var shuttingDown = false;
+function shutdownWindow() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  dirty = false;  // beforeunload 경고가 닫힘을 막지 않도록 (서버가 없어 저장 불가)
+  var ov = document.createElement("div");
+  ov.style.cssText = "position:fixed;inset:0;background:rgba(17,24,39,0.93);z-index:9999;" +
+    "display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;" +
+    "color:#fff;font-size:16px;font-weight:600;";
+  ov.innerHTML = "<div>서버가 종료되어 이 창을 닫습니다</div>" +
+    "<div style='font-size:13px;color:#9ca3af;font-weight:400'>다시 사용하려면 업무스케줄.bat를 실행하세요</div>";
+  document.body.appendChild(ov);
+  setTimeout(function() { window.close(); }, 2500);
+  setTimeout(function() {  // window.close()가 차단되는 환경 대비
+    ov.innerHTML += "<div style='font-size:12px;color:#6b7280;font-weight:400'>창이 자동으로 닫히지 않으면 직접 닫아주세요</div>";
+  }, 4500);
+}
+setInterval(function() {
+  if (shuttingDown) return;
+  fetch("/ping", { cache: "no-store" }).then(function(r) {
+    pingFails = 0;
+    var v = r.headers.get("X-App-Version");
+    // 서버가 새 코드로 교체됨 → 편집 중이 아닐 때 조용히 최신 화면으로
+    if (v && v !== APP_VER && !dirty && !gantt.getState().lightbox) {
+      snapshotView();
+      location.reload();
+    }
+  }).catch(function() {
+    pingFails++;
+    if (pingFails >= 3) shutdownWindow();  // 약 12초 연속 무응답 → 유령 창 방지
+  });
+}, 4000);
 </script>
 </body>
 </html>
