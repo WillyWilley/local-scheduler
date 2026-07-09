@@ -471,14 +471,21 @@ APP_HTML = r'''<!DOCTYPE html>
   .status-upcoming { background: #f3f4f6; color: #6b7280; }
   .status-undetermined { background: #fef3c7; color: #92400e; }
 
-  /* ── 추가(+) 버튼: 추가 가능한 그룹 행에서 마우스를 올렸을 때만 표시 ── */
-  .gantt_grid_head_add { background-image: none; pointer-events: none; }
-  .gantt_grid_head_add::after {
-    content: "추가"; font-size: 11px; color: #9ca3af; font-weight: 600;
+  /* ── 행 버튼(+/✕): 마우스를 올렸을 때만 표시 ── */
+  .row-acts {
+    display: flex; gap: 4px; justify-content: center; align-items: center;
+    opacity: 0; transition: opacity 0.15s; height: 100%;
   }
-  .gantt_grid .gantt_add { opacity: 0; transition: opacity 0.15s; }
-  .gantt_row:hover .gantt_add { opacity: 1; }
-  .no-add-row .gantt_add { display: none !important; }
+  .gantt_row:hover .row-acts { opacity: 1; }
+  .row-acts span {
+    width: 20px; height: 20px; line-height: 20px; text-align: center;
+    border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 700;
+    color: #9ca3af; user-select: none;
+  }
+  .grid-add:hover { color: #4f46e5; background: #eef2ff; }
+  .grid-del:hover { color: #dc2626; background: #fee2e2; }
+  body.dark .grid-add:hover { background: #1e1b4b; }
+  body.dark .grid-del:hover { background: #450a0a; }
 
   /* ── 편집창(라이트박스) 디자인 ── */
   .gantt_cal_light {
@@ -882,7 +889,20 @@ gantt.config.columns = [
       return '<span style="font-size:11px;color:#6b7280" title="' + escHtml(task.notes).replace(/\n/g, '&#10;') + '">' + escHtml(short) + '</span>';
     }
   },
-  { name: "add", width: 40 }
+  { name: "acts", label: "추가/삭제", align: "center", width: 64,
+    template: function(task) {
+      if (task.is_past_group) return "";
+      var h = "<div class='row-acts'>";
+      var canAdd = !(task.kind === "task" || (task.kind === "event" && !task.is_section));
+      if (task.is_section) {
+        h += "<span class='grid-add' title='이 섹션에 항목 추가'>+</span>";
+      } else {
+        if (canAdd) h += "<span class='grid-add' title='하위 항목 추가'>+</span>";
+        h += "<span class='grid-del' title='이 항목 삭제'>✕</span>";
+      }
+      return h + "</div>";
+    }
+  }
 ];
 
 // 인라인 편집: 섹션·지난그룹 행은 제외
@@ -980,8 +1000,6 @@ gantt.templates.grid_row_class = function(start, end, task) {
     cls.push("done-row");
     if (task.bar_level === 3) cls.push("leaf-row");
   }
-  // + 버튼은 하위 항목을 가질 수 있는 행에만 (업무·일정·지난그룹 제외)
-  if (task.kind === "task" || task.kind === "event" || task.is_past_group) cls.push("no-add-row");
   return cls.join(" ");
 };
 gantt.templates.task_row_class = function(start, end, task) {
@@ -1382,8 +1400,19 @@ gantt.attachEvent("onLightboxSave", function(id, task) {
   return true;
 });
 
-// ── 상태 뱃지 클릭 = 완료 토글 ──
+// ── 행 버튼(+/✕) 및 상태 뱃지 클릭 처리 ──
 gantt.attachEvent("onTaskClick", function(id, e) {
+  if (e.target.closest(".grid-add")) {
+    gantt.createTask({}, id);  // 이 행 아래에 새 항목 (편집창 자동 오픈)
+    return false;
+  }
+  if (e.target.closest(".grid-del")) {
+    var dt = gantt.getTask(id);
+    if (!dt.is_section && !dt.is_past_group && confirm('"' + dt.text + '" 항목을 삭제할까요?')) {
+      gantt.deleteTask(id);
+    }
+    return false;
+  }
   var badge = e.target.closest(".status-badge");
   if (badge && badge.classList.contains("clickable")) {
     var t = gantt.getTask(id);
