@@ -708,7 +708,7 @@ APP_HTML = r'''<!DOCTYPE html>
 <div class="page-header">
   <div>
     <h1>업무 스케줄</h1>
-    <div class="subtitle">드래그·더블클릭으로 바로 편집 · 마지막 업데이트 {{LAST_UPDATED}}</div>
+    <div class="subtitle">드래그·더블클릭으로 바로 편집 — 변경은 자동 저장됩니다 · 마지막 업데이트 {{LAST_UPDATED}}</div>
   </div>
   <div class="header-controls">
     <input id="searchBox" class="search-box" type="search" placeholder="🔍 검색" oninput="onSearch(this.value)">
@@ -1619,13 +1619,17 @@ function expandAll() {
   gantt.render();
 }
 
-// ── 변경 감지 · 저장 · 토스트 ──
+// ── 변경 감지 · 자동 저장 · 토스트 ──
 var dirty = false;
+var autosaveTimer = null;
 function markDirty() {
   dirty = true;
   var b = document.getElementById("saveBtn");
   b.classList.add("dirty");
   b.textContent = "저장 *";
+  // 자동 저장: 편집이 멈추고 1.5초 뒤 파일에 저장 (버튼 누를 필요 없음)
+  clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(function() { saveAll(true); }, 1500);
 }
 gantt.attachEvent("onAfterTaskUpdate", markDirty);
 gantt.attachEvent("onRowDragEnd", markDirty);
@@ -1643,8 +1647,12 @@ function showToast(msg) {
   setTimeout(function() { t.classList.remove("show"); }, 2200);
 }
 
-function saveAll() {
-  if (!dirty) return;
+function saveAll(auto) {
+  clearTimeout(autosaveTimer);
+  if (!dirty) {
+    if (!auto) { snapshotView(); location.reload(); }  // 수동 저장 = 화면 재정렬 겸 새로고침
+    return;
+  }
   fetch("/save", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1653,10 +1661,18 @@ function saveAll() {
   }).then(function(r) { return r.json(); }).then(function(res) {
     if (res.ok) {
       dirty = false;
+      if (res.token) DATA_TOKEN = res.token;  // 다음 자동 저장이 이어지도록 세대 갱신
+      var b = document.getElementById("saveBtn");
+      b.classList.remove("dirty");
+      b.textContent = "저장";
       if (res.warn) alert(res.warn);  // 저장은 성공, 재빌드만 실패한 경우
-      showToast("저장 완료");
-      snapshotView();
-      setTimeout(function() { location.reload(); }, 500);
+      if (auto) {
+        showToast("자동 저장됨");  // 화면은 그대로 (재정렬은 다음 열 때)
+      } else {
+        showToast("저장 완료");
+        snapshotView();
+        setTimeout(function() { location.reload(); }, 500);
+      }
     } else {
       alert("저장 실패: " + res.error);
     }
@@ -1945,9 +1961,10 @@ class Handler(BaseHTTPRequestHandler):
                     bs.main()  # NAS 공유용 업무_스케줄.html 재빌드
                 except Exception as e2:
                     warn = f"저장은 완료됐지만 공유용 HTML 재빌드에 실패했습니다: {e2}"
+                new_token = data_token()  # 자동 저장이 연속되도록 새 세대 토큰 반환
 
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 저장 완료" + (" (재빌드 실패)" if warn else " + 재빌드 완료"))
-            self._send(json.dumps({"ok": True, "warn": warn}, ensure_ascii=False),
+            self._send(json.dumps({"ok": True, "warn": warn, "token": new_token}, ensure_ascii=False),
                        "application/json; charset=utf-8")
         except Exception as e:
             import traceback
