@@ -2338,15 +2338,23 @@ def open_app_window(url):
     webbrowser.open(url)  # 폴백: 일반 브라우저
 
 
+def _run_text(cmd, timeout=10):
+    """콘솔 명령 실행 → 문자열. 한국어 Windows의 출력이 UTF-8이 아니어도 죽지 않도록
+    바이트로 받아 안전하게 디코드한다. 실패 시 None."""
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=timeout, creationflags=NOWIN)
+        return (r.stdout or b"").decode("utf-8", "replace")
+    except Exception as e:
+        print(f"! 명령 실행 실패 {cmd[0]}: {e}")
+        return None
+
+
 def listening_ports(candidates):
     """후보 중 실제로 리스닝 중인 포트만 골라냄.
     (이 PC 방화벽은 빈 포트 접속을 즉시 거부하지 않고 타임아웃까지 끌어서,
     빈 포트에 HTTP 프로브를 하면 포트당 1.5초씩 낭비됨 — netstat으로 선별)"""
-    try:
-        out = subprocess.run(["netstat", "-ano", "-p", "TCP"],
-                             capture_output=True, text=True, timeout=10,
-                             creationflags=NOWIN).stdout
-    except Exception:
+    out = _run_text(["netstat", "-ano", "-p", "TCP"])
+    if out is None:
         return set(candidates)  # 판별 불가 시 전체 확인 (느리지만 안전)
     found = set()
     cand = {str(c) for c in candidates}
@@ -2392,11 +2400,8 @@ def probe_port(port):
 def kill_python_on_port(port):
     """해당 포트를 점유한 파이썬 프로세스만 종료 (우리 구세대 서버로 확인된 경우에만 호출).
     종료 성공 여부를 확인하고, 포트가 실제로 해제될 때까지 잠시 대기한다."""
-    try:
-        out = subprocess.run(["netstat", "-ano", "-p", "TCP"],
-                             capture_output=True, text=True, timeout=10,
-                             creationflags=NOWIN).stdout
-    except Exception:
+    out = _run_text(["netstat", "-ano", "-p", "TCP"])
+    if out is None:
         return
     my_pid = str(os.getpid())
     killed_any = False
@@ -2409,9 +2414,7 @@ def kill_python_on_port(port):
         local, pid = parts[1], parts[-1]
         if local.endswith(f":{port}") and pid.isdigit() and pid != my_pid:
             try:
-                info = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"],
-                                      capture_output=True, text=True, timeout=10,
-                                      creationflags=NOWIN).stdout.lower()
+                info = (_run_text(["tasklist", "/FI", f"PID eq {pid}"]) or "").lower()
                 if "python" in info:
                     r = subprocess.run(["taskkill", "/PID", pid, "/F"],
                                        capture_output=True, timeout=10, creationflags=NOWIN)
@@ -2435,15 +2438,20 @@ def main():
     # 구세대 앱이면 정리, 무관한 서버면 건드리지 않고 다음 포트 사용.
     # 실제 리스닝 중인 포트만 확인해 빈 포트 타임아웃 낭비를 없앤다.
     candidates = list(range(PORT, PORT + 10))
-    for p in sorted(listening_ports(candidates)):
-        state = probe_port(p)
-        if state == "ours-live":
-            url = f"http://127.0.0.1:{p}/"
-            print(f"이미 실행 중인 앱을 발견했습니다 — 창만 엽니다: {url}")
-            open_app_window(url)
-            return
-        if state == "ours-old":
-            kill_python_on_port(p)
+    try:
+        for p in sorted(listening_ports(candidates)):
+            state = probe_port(p)
+            if state == "ours-live":
+                url = f"http://127.0.0.1:{p}/"
+                print(f"이미 실행 중인 앱을 발견했습니다 — 창만 엽니다: {url}")
+                open_app_window(url)
+                return
+            if state == "ours-old":
+                kill_python_on_port(p)
+    except Exception as e:  # 포트 정리 실패가 앱 실행 자체를 막지 않도록
+        import traceback
+        traceback.print_exc()
+        print(f"! 포트 정리 중 오류 (계속 진행): {e}")
 
     port = PORT
     server = None
