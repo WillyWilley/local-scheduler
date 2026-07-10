@@ -474,13 +474,14 @@ APP_HTML = r'''<!DOCTYPE html>
   body.dark .section-row-recur { background: #052e22 !important; border-top-color: #047857 !important; }
   body.dark .section-row-recur .gantt_tree_content { color: #6ee7b7 !important; }
 
-  /* 반복 일정: 바 대신 회차마다 다이아몬드 */
+  /* 반복 일정: 바 대신 회차마다 다이아몬드 (더블클릭으로 편집) */
   .recur-row .gantt_tree_content { padding-left: 10px !important; }
   .recur-dot {
     position: absolute; width: 11px; height: 11px;
     background: #6b7280; transform: rotate(45deg); border-radius: 2px;
-    pointer-events: none; z-index: 1;
+    cursor: pointer; z-index: 2; transition: transform 0.1s;
   }
+  .recur-dot:hover { transform: rotate(45deg) scale(1.35); }
   .status-recur { background: #d1fae5; color: #047857; }
 
   /* 반복 규칙 편집 컨트롤 */
@@ -1163,10 +1164,23 @@ function renderRecurDots() {
       dot.className = "recur-dot " + (task.color_class || "");
       dot.style.left = (x - 5.5) + "px";
       dot.style.top = top + "px";
+      dot.dataset.taskId = task.id;
+      dot.title = task.text + " · " + iso + (task.custom_time ? " " + task.custom_time : "");
       area.appendChild(dot);
     });
   });
 }
+
+// 회차 다이아몬드 더블클릭 = 반복 일정 편집 (한 번만 등록)
+document.addEventListener("dblclick", function(e) {
+  var dot = e.target.closest && e.target.closest(".recur-dot");
+  if (!dot) return;
+  e.preventDefault();
+  e.stopPropagation();
+  var id = dot.dataset.taskId;
+  if (gantt.isTaskExists(id)) gantt.showLightbox(id);
+  else if (gantt.isTaskExists(+id)) gantt.showLightbox(+id);
+}, true);
 
 gantt.templates.task_text = function(start, end, task) { return ""; };
 gantt.templates.lightbox_header = function(start, end, task) {
