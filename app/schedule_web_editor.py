@@ -1186,7 +1186,12 @@ gantt.form_blocks["daterange"] = {
     if (e < s) e = new Date(s);
     var endEx = new Date(e);
     endEx.setDate(endEx.getDate() + 1);  // gantt end_date는 배타적
-    return { start_date: s, end_date: endEx };
+    // dhtmlx v10은 커스텀 컨트롤의 map_to:"auto" 반환값을 무시하므로
+    // 저장용 태스크 객체(task)에 날짜를 직접 기록한다 (핵심!)
+    task.start_date = s;
+    task.end_date = endEx;
+    task.duration = Math.round((endEx - s) / 86400000);
+    return { start_date: s, end_date: endEx };  // 구버전 규약 호환용
   },
   focus: function(node) {}
 };
