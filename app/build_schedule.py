@@ -873,14 +873,18 @@ gantt.config.columns = [
   { name: "start_date", label: "시작", align: "center", width: 100,
     template: function(task) {
       if (task.is_section || task.is_past_group) return "";
-      if (task.is_recur) return '<span style="font-size:11px;color:#6b7280">' + escHtml(task.recur_text || "") + '</span>';
+      if (task.is_recur) {
+        var n = task.occurrences ? task.occurrences.length : 0;
+        return '<span style="font-size:11px;color:#6b7280">' + escHtml(task.recur_text || "") +
+               (n ? ' · ' + n + '회' : '') + '</span>';
+      }
       return gantt.templates.date_grid(task.start_date, task);
     }
   },
   { name: "duration", label: "기간(일)", align: "center", width: 90,
     template: function(task) {
       if (task.is_section || task.is_past_group) return "";
-      if (task.is_recur) return (task.occurrences ? task.occurrences.length : 0) + "회";
+      if (task.is_recur) return "";  // 반복 일정은 기간 개념이 없음 (회차는 '시작' 열에 표시)
       if (task.is_single_event && task.start_date && task.end_date) {
         var d = Math.round((task.end_date - task.start_date) / 86400000);
         return d || 1;  // 일회성 일정은 주말 포함 달력일
