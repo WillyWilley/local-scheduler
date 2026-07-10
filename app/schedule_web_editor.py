@@ -2419,39 +2419,68 @@ class Handler(BaseHTTPRequestHandler):
                        "application/json; charset=utf-8", 500)
 
 
-def _maximize_app_window(timeout=15.0):
-    """앱 창을 찾아 강제 최대화.
-    (Chromium --app 창은 --start-maximized를 무시하고 마지막 크기를 복원하기 때문)"""
+def _find_app_windows():
+    """제목이 정확히 '업무 스케줄'인 보이는 창들 (Edge 앱 모드 창의 제목 = 페이지 제목)"""
     import ctypes
     user32 = ctypes.windll.user32
-    SW_MAXIMIZE = 3
     target = "업무 스케줄"
+    found = []
     proc_t = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        found = []
 
-        def cb(hwnd, lparam):
-            n = user32.GetWindowTextLengthW(hwnd)
-            if n:
-                buf = ctypes.create_unicode_buffer(n + 1)
-                user32.GetWindowTextW(hwnd, buf, n + 1)
-                # 앱 창 제목은 페이지 제목 그대로 (브라우저 탭 창은 ' - Edge' 등이 붙음)
-                if buf.value.strip() == target and user32.IsWindowVisible(hwnd):
-                    found.append(hwnd)
-            return True
+    def cb(hwnd, lparam):
+        n = user32.GetWindowTextLengthW(hwnd)
+        if n:
+            buf = ctypes.create_unicode_buffer(n + 1)
+            user32.GetWindowTextW(hwnd, buf, n + 1)
+            if buf.value.strip() == target and user32.IsWindowVisible(hwnd):
+                found.append(hwnd)
+        return True
 
-        user32.EnumWindows(proc_t(cb), 0)
-        if found:
-            for h in found:
-                user32.ShowWindow(h, SW_MAXIMIZE)
-            return True
-        time.sleep(0.5)
+    user32.EnumWindows(proc_t(cb), 0)
+    return found
+
+
+def _is_maximized(hwnd):
+    import ctypes
+
+    class WINDOWPLACEMENT(ctypes.Structure):
+        _fields_ = [("length", ctypes.c_uint), ("flags", ctypes.c_uint),
+                    ("showCmd", ctypes.c_uint),
+                    ("ptMinPosition", ctypes.c_long * 2),
+                    ("ptMaxPosition", ctypes.c_long * 2),
+                    ("rcNormalPosition", ctypes.c_long * 4)]
+
+    wp = WINDOWPLACEMENT()
+    wp.length = ctypes.sizeof(WINDOWPLACEMENT)
+    if ctypes.windll.user32.GetWindowPlacement(hwnd, ctypes.byref(wp)):
+        return wp.showCmd == 3  # SW_SHOWMAXIMIZED
     return False
 
 
-def open_app_window(url):
-    """주소창 없는 독립 앱 창으로 열기 (Edge/Chrome --app 모드, 전체화면)"""
+def _maximize_app_window(timeout=12.0):
+    """앱 창을 찾아 강제 최대화하고, 잠시 감시하며 복원되면 다시 최대화한다.
+    (Chromium --app 창은 --start-maximized를 무시하고 마지막 크기를 복원한다)"""
+    import ctypes
+    user32 = ctypes.windll.user32
+    SW_MAXIMIZE = 3
+    deadline = time.time() + timeout
+    done = False
+    while time.time() < deadline:
+        for h in _find_app_windows():
+            if not _is_maximized(h):
+                user32.ShowWindow(h, SW_MAXIMIZE)
+            try:
+                user32.SetForegroundWindow(h)
+            except Exception:
+                pass
+            done = True
+        time.sleep(0.4 if done else 0.3)
+    return done
+
+
+def open_app_window(url, wait=False):
+    """주소창 없는 독립 앱 창으로 열기 (Edge/Chrome --app 모드, 전체화면).
+    wait=True면 최대화가 끝날 때까지 기다린다 (창만 열고 프로세스가 종료되는 경로용)."""
     candidates = [
         os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
         os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
@@ -2469,7 +2498,10 @@ def open_app_window(url):
             except Exception:
                 size_args = []
             subprocess.Popen([exe, f"--app={url}", "--start-maximized"] + size_args)
-            threading.Thread(target=_maximize_app_window, daemon=True).start()
+            if wait:  # 프로세스가 곧 종료되는 경로 → 데몬 스레드가 죽지 않도록 직접 실행
+                _maximize_app_window()
+            else:
+                threading.Thread(target=_maximize_app_window, daemon=True).start()
             return
     webbrowser.open(url)  # 폴백: 일반 브라우저
 
@@ -2580,7 +2612,7 @@ def main():
             if state == "ours-live":
                 url = f"http://127.0.0.1:{p}/"
                 print(f"이미 실행 중인 앱을 발견했습니다 — 창만 엽니다: {url}")
-                open_app_window(url)
+                open_app_window(url, wait=True)
                 return
             if state == "ours-old":
                 kill_python_on_port(p)
