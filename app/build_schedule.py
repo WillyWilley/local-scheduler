@@ -17,12 +17,25 @@ OUTPUT_FILE = os.path.join(BASE_DIR, "output", "업무_스케줄.html")
 
 
 def ensure_data_file():
-    """데이터 파일이 없으면 예시 데이터로 시작 (처음 받아서 실행하는 사람용)"""
+    """데이터 파일이 없으면 예시 데이터로 시작 (처음 받아서 실행하는 사람용).
+    기존 파일에 반복 일정 섹션이 없으면 추가한다 (스키마 마이그레이션)."""
     if not os.path.exists(DATA_FILE) and os.path.exists(SAMPLE_FILE):
         import shutil
         os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
         shutil.copyfile(SAMPLE_FILE, DATA_FILE)
         print("schedule_data.json이 없어 예시 데이터로 시작합니다.")
+
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return
+    if ensure_sections(data):
+        tmp = DATA_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, DATA_FILE)
+        print("반복 일정 섹션을 추가했습니다.")
 
 HOLIDAY_CACHE = os.path.join(BASE_DIR, "data", "holidays_cache.json")
 
@@ -157,6 +170,134 @@ def workdays_between(start_dt: datetime, end_dt: datetime) -> int:
 
 def gantt_date(d: datetime) -> str:
     return d.strftime("%d-%m-%Y 00:00")
+
+
+# ══════════════════════ 반복 일정 ══════════════════════
+# 규칙 예:
+#   매주:  {"freq":"weekly",  "interval":1, "weekdays":[1,5]}   (0=일 … 6=토)
+#   매월:  {"freq":"monthly", "day":15}  또는  {"freq":"monthly","nth":1,"weekday":1}
+#          (nth: 1~4=첫째~넷째, -1=마지막)
+#   매년:  {"freq":"yearly",  "month":3, "day":2}
+MAX_OCCURRENCES = 400  # 폭주 방지 상한
+RECUR_MAX_YEARS = 3    # 종료일이 없으면 오늘 기준 3년까지만 전개
+
+
+def _nth_weekday_of_month(year, month, nth, weekday):
+    """그 달의 nth번째 weekday(0=일). nth=-1이면 마지막 주. 없으면 None."""
+    first = datetime(year, month, 1)
+    days_in_month = (datetime(year + (month == 12), (month % 12) + 1, 1) - timedelta(days=1)).day
+    matches = [d for d in range(1, days_in_month + 1)
+               if datetime(year, month, d).weekday() == (weekday - 1) % 7]
+    if not matches:
+        return None
+    if nth == -1:
+        return datetime(year, month, matches[-1])
+    if 1 <= nth <= len(matches):
+        return datetime(year, month, matches[nth - 1])
+    return None
+
+
+def expand_recurrence(rule):
+    """반복 규칙 → 발생 날짜(datetime) 목록"""
+    freq = rule.get("freq", "weekly")
+    try:
+        start = datetime.strptime(rule["start"], "%Y-%m-%d")
+    except (KeyError, ValueError):
+        return []
+    if rule.get("end"):
+        try:
+            end = datetime.strptime(rule["end"], "%Y-%m-%d")
+        except ValueError:
+            end = start
+    else:
+        end = datetime.now() + timedelta(days=365 * RECUR_MAX_YEARS)
+    if end < start:
+        end = start
+
+    out = []
+    if freq == "weekly":
+        interval = max(1, int(rule.get("interval", 1) or 1))
+        # weekday: 파이썬 0=월 … 6=일 / 데이터 0=일 … 6=토
+        wanted = {(int(w) - 1) % 7 for w in (rule.get("weekdays") or [])}
+        if not wanted:
+            wanted = {start.weekday()}
+        # 시작 주의 월요일 기준으로 interval 주 간격만 채택
+        week0 = start - timedelta(days=start.weekday())
+        d = start
+        while d <= end and len(out) < MAX_OCCURRENCES:
+            weeks = (d - timedelta(days=d.weekday()) - week0).days // 7
+            if d.weekday() in wanted and weeks % interval == 0:
+                out.append(d)
+            d += timedelta(days=1)
+
+    elif freq == "monthly":
+        y, m = start.year, start.month
+        while len(out) < MAX_OCCURRENCES:
+            if rule.get("nth"):
+                d = _nth_weekday_of_month(y, m, int(rule["nth"]), int(rule.get("weekday", 1)))
+            else:
+                day = int(rule.get("day", start.day))
+                try:
+                    d = datetime(y, m, day)
+                except ValueError:
+                    d = None  # 그 달에 없는 날짜(예: 31일) → 건너뜀
+            if d and start <= d <= end:
+                out.append(d)
+            if d and d > end:
+                break
+            m += 1
+            if m > 12:
+                m, y = 1, y + 1
+            if datetime(y, m, 1) > end:
+                break
+
+    elif freq == "yearly":
+        month = int(rule.get("month", start.month))
+        day = int(rule.get("day", start.day))
+        for y in range(start.year, end.year + 1):
+            try:
+                d = datetime(y, month, day)
+            except ValueError:
+                continue
+            if start <= d <= end:
+                out.append(d)
+            if len(out) >= MAX_OCCURRENCES:
+                break
+
+    return out
+
+
+def recur_summary(rule):
+    """규칙 → 사람이 읽는 한 줄 요약"""
+    wd = ["일", "월", "화", "수", "목", "금", "토"]
+    freq = rule.get("freq", "weekly")
+    if freq == "weekly":
+        iv = int(rule.get("interval", 1) or 1)
+        head = "매주" if iv == 1 else ("격주" if iv == 2 else f"{iv}주마다")
+        days = "".join(wd[int(w) % 7] for w in sorted(rule.get("weekdays") or []))
+        return f"{head} {days}" if days else head
+    if freq == "monthly":
+        if rule.get("nth"):
+            nth = int(rule["nth"])
+            label = "마지막" if nth == -1 else ["첫째", "둘째", "셋째", "넷째"][min(nth, 4) - 1]
+            return f"매월 {label} {wd[int(rule.get('weekday', 1)) % 7]}요일"
+        return f"매월 {int(rule.get('day', 1))}일"
+    if freq == "yearly":
+        return f"매년 {int(rule.get('month', 1))}월 {int(rule.get('day', 1))}일"
+    return "반복"
+
+
+def ensure_sections(data):
+    """오래된 데이터에 반복 일정 섹션이 없으면 추가 (마이그레이션)"""
+    if not any(s.get("type") == "recurring" for s in data.get("sections", [])):
+        data.setdefault("sections", []).append({
+            "id": "sec-recur",
+            "title": "🔁 반복 일정",
+            "type": "recurring",
+            "recurrences": [],
+        })
+        return True
+    return False
 
 
 def build_gantt_data(data: dict) -> list:
@@ -429,6 +570,34 @@ def build_gantt_data(data: dict) -> list:
                 for evt in past:
                     items.append(build_evt_item(evt, past_id))
 
+        elif sec_type == "recurring":
+            for rec in section.get("recurrences", []):
+                color = rec.get("color", "")
+                occ = expand_recurrence(rec)
+                item = {
+                    "id": rec["id"],
+                    "text": rec["title"],
+                    "parent": sec_id,
+                    "is_recur": True,
+                    "bar_level": 3,
+                    "color_class": f"color-{color}" if color else "",
+                    "recur": {k: v for k, v in rec.items()
+                              if k in ("freq", "interval", "weekdays", "day", "nth", "weekday", "month")},
+                    "recur_text": recur_summary(rec),
+                    "occurrences": [d.strftime("%Y-%m-%d") for d in occ],
+                }
+                # 규칙 기간을 행의 범위로 (바는 숨기고 회차 다이아몬드만 그림)
+                s = datetime.strptime(rec["start"], "%Y-%m-%d")
+                e = (datetime.strptime(rec["end"], "%Y-%m-%d")
+                     if rec.get("end") else (occ[-1] if occ else s))
+                item["start_date"] = gantt_date(s)
+                item["end_date"] = gantt_date(e + timedelta(days=1))
+                if rec.get("time"):
+                    item["custom_time"] = rec["time"]
+                if rec.get("notes"):
+                    item["notes"] = rec["notes"]
+                items.append(item)
+
     return items
 
 
@@ -452,6 +621,8 @@ def build_color_css(colors: dict) -> str:
         lines.append(f"  .gantt_task_line.{cls}.lv-subproject {{ background: {bg} !important; box-shadow: inset 0 0 0 2px {border}; }}")
         # 프로젝트: 진한 실색
         lines.append(f"  .gantt_task_line.{cls}.lv-project {{ background: {border} !important; border-color: {border} !important; }}")
+        # 반복 일정 회차 다이아몬드
+        lines.append(f"  .recur-dot.{cls} {{ background: {bg}; }}")
         # '상자' 밴드: 세부 프로젝트 범위만큼 자식 행 배경을 연하게 물들임
         lines.append(f"  .gantt_task_cell.range-band.band-{name} {{ background: {hex_to_rgba(bg, 0.07)}; }}")
         lines.append(f"  .gantt_task_cell.weekend.range-band.band-{name} {{ background: {hex_to_rgba(bg, 0.13)} !important; }}")
@@ -512,6 +683,17 @@ HTML_TEMPLATE = r'''<!DOCTYPE html>
   .section-row .gantt_tree_content { color: #4338ca !important; font-size: 14px !important; letter-spacing: 0.5px; }
   .section-row-event { background: #fef3c7 !important; font-weight: 700 !important; border-top: 2px solid #fcd34d !important; }
   .section-row-event .gantt_tree_content { color: #92400e !important; font-size: 14px !important; letter-spacing: 0.5px; }
+  .section-row-recur { background: #ecfdf5 !important; font-weight: 700 !important; border-top: 2px solid #6ee7b7 !important; }
+  .section-row-recur .gantt_tree_content { color: #047857 !important; font-size: 14px !important; letter-spacing: 0.5px; }
+
+  /* 반복 일정: 바는 숨기고 회차마다 다이아몬드 */
+  .recur-row .gantt_tree_content { padding-left: 10px !important; }
+  .recur-dot {
+    position: absolute; width: 11px; height: 11px;
+    background: #6b7280; transform: rotate(45deg); border-radius: 2px;
+    pointer-events: none; z-index: 1;
+  }
+  .status-recur { background: #d1fae5; color: #047857; }
 
   .single-event-row .gantt_tree_content { padding-left: 10px !important; }
 
@@ -679,6 +861,7 @@ gantt.config.columns = [
   { name: "text", label: "업무명", tree: true, width: 300, resize: true },
   { name: "status", label: "상태", align: "center", width: 60,
     template: function(task) {
+      if (task.is_recur) return '<span class="status-badge status-recur">반복</span>';
       var st = getTaskStatus(task);
       if (st === 'in-progress') return '<span class="status-badge status-in-progress">진행중</span>';
       if (st === 'upcoming') return '<span class="status-badge status-upcoming">예정</span>';
@@ -690,12 +873,14 @@ gantt.config.columns = [
   { name: "start_date", label: "시작", align: "center", width: 100,
     template: function(task) {
       if (task.is_section || task.is_past_group) return "";
+      if (task.is_recur) return '<span style="font-size:11px;color:#6b7280">' + escHtml(task.recur_text || "") + '</span>';
       return gantt.templates.date_grid(task.start_date, task);
     }
   },
   { name: "duration", label: "기간(일)", align: "center", width: 90,
     template: function(task) {
       if (task.is_section || task.is_past_group) return "";
+      if (task.is_recur) return (task.occurrences ? task.occurrences.length : 0) + "회";
       if (task.is_single_event && task.start_date && task.end_date) {
         var d = Math.round((task.end_date - task.start_date) / 86400000);
         return d || 1;  // 일회성 일정은 주말 포함 달력일
@@ -793,6 +978,8 @@ gantt.templates.grid_row_class = function(start, end, task) {
   var cls = [];
   if (task.is_section === 'project') cls.push("section-row");
   else if (task.is_section === 'event') cls.push("section-row-event");
+  else if (task.is_section === 'recurring') cls.push("section-row-recur");
+  else if (task.is_recur) cls.push("recur-row");
   else if (task.is_parent_project) cls.push("project-row");
   if (task.is_past_group) cls.push("past-group-row");
   if (task.is_sub_project) cls.push("sub-project-row");
@@ -808,10 +995,30 @@ gantt.templates.task_row_class = function(start, end, task) {
   var cls = [];
   if (task.is_section === 'project') cls.push("section-row");
   else if (task.is_section === 'event') cls.push("section-row-event");
+  else if (task.is_section === 'recurring') cls.push("section-row-recur");
   if (task.is_single_event) cls.push("single-event-row");
   if (task.custom_status === 'undetermined') cls.push("undetermined-row");
   return cls.join(" ");
 };
+
+// 반복 일정: 회차마다 다이아몬드 표시 (바 대신)
+gantt.addTaskLayer(function(task) {
+  if (!task.is_recur || !task.occurrences || !task.occurrences.length) return false;
+  var box = document.createElement("div");
+  var top = gantt.getTaskTop(task.id) + (gantt.config.row_height - 11) / 2;
+  task.occurrences.forEach(function(iso) {
+    var p = iso.split("-");
+    var d = new Date(+p[0], +p[1] - 1, +p[2], 12, 0, 0);
+    var x = gantt.posFromDate(d);
+    if (x < -20) return;
+    var dot = document.createElement("div");
+    dot.className = "recur-dot " + (task.color_class || "");
+    dot.style.left = (x - 5.5) + "px";
+    dot.style.top = top + "px";
+    box.appendChild(dot);
+  });
+  return box;
+});
 
 // 바 위 텍스트 숨기기
 gantt.templates.task_text = function(start, end, task) { return ""; };
@@ -826,7 +1033,7 @@ gantt.templates.rightside_text = function(start, end, task) {
 
 // 바 색상 + 레벨 위계 + 완료 처리
 gantt.templates.task_class = function(start, end, task) {
-  if (task.is_section || task.is_past_group) return "hide-bar";
+  if (task.is_section || task.is_past_group || task.is_recur) return "hide-bar";
   var cls = task.color_class || "";
   if (task.bar_level === 1) cls += " lv-project";
   else if (task.bar_level === 2) cls += " lv-subproject";
@@ -841,6 +1048,13 @@ try {
   gantt.templates.tooltip_date_format = gantt.date.date_to_str("%Y-%m-%d");
   gantt.templates.tooltip_text = function(start, end, task) {
     var h = "<b>" + escHtml(task.text) + "</b><br>";
+    if (task.is_recur) {
+      h += escHtml(task.recur_text || "반복");
+      h += "<br>총 " + (task.occurrences ? task.occurrences.length : 0) + "회";
+      if (task.custom_time) h += "<br>시간: " + escHtml(task.custom_time);
+      if (task.notes) h += "<br><br><b>메모:</b><br>" + escHtml(task.notes).replace(/\n/g, "<br>");
+      return h;
+    }
     if (task.custom_status === 'undetermined') {
       h += "기간: 미정";
     } else {

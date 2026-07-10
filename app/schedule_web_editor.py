@@ -78,6 +78,9 @@ def build_app_items(data):
         for e in sec.get("events", []):
             kind_map[str(e["id"])] = "event"
             color_map[str(e["id"])] = e.get("color", "")
+        for r in sec.get("recurrences", []):
+            kind_map[str(r["id"])] = "recur"
+            color_map[str(r["id"])] = r.get("color", "")
 
     for it in items:
         sid = str(it["id"])
@@ -143,6 +146,8 @@ def save_from_flat(flat, data):
                     orig[str(t["id"])] = t
         for e in sec.get("events", []):
             orig[str(e["id"])] = e
+        for r in sec.get("recurrences", []):
+            orig[str(r["id"])] = r
 
     numeric_ids = [int(k) for k in orig if k.lstrip("-").isdigit()]
     next_id = (max(numeric_ids) + 1) if numeric_ids else 1
@@ -274,10 +279,52 @@ def save_from_flat(flat, data):
             obj.pop("time", None)
         return obj
 
+    def map_recur(node):
+        obj = get_or_new(node)
+        upd_common(node, obj)
+        upd_color(node, obj)
+        obj.pop("done", None)  # 반복 일정에는 완료 개념 없음
+        d = leaf_dates(node)
+        if d:
+            s, e = d
+            obj["start"] = s.strftime("%Y-%m-%d")
+            obj["end"] = e.strftime("%Y-%m-%d")
+        obj.setdefault("start", today_iso)
+        t = (node.get("custom_time") or "").strip()
+        if t:
+            obj["time"] = t
+        else:
+            obj.pop("time", None)
+
+        rule = node.get("recur") or {}
+        freq = rule.get("freq") if rule.get("freq") in ("weekly", "monthly", "yearly") else "weekly"
+        obj["freq"] = freq
+        for k in ("interval", "weekdays", "day", "nth", "weekday", "month"):
+            obj.pop(k, None)
+        if freq == "weekly":
+            obj["interval"] = max(1, min(12, int(rule.get("interval", 1) or 1)))
+            wd = [int(w) for w in (rule.get("weekdays") or []) if 0 <= int(w) <= 6]
+            obj["weekdays"] = sorted(set(wd)) or [
+                (datetime.strptime(obj["start"], "%Y-%m-%d").weekday() + 1) % 7]
+        elif freq == "monthly":
+            if rule.get("nth"):
+                obj["nth"] = int(rule["nth"])
+                obj["weekday"] = int(rule.get("weekday", 1)) % 7
+            else:
+                obj["day"] = max(1, min(31, int(rule.get("day") or
+                                                datetime.strptime(obj["start"], "%Y-%m-%d").day)))
+        else:  # yearly
+            st = datetime.strptime(obj["start"], "%Y-%m-%d")
+            obj["month"] = max(1, min(12, int(rule.get("month") or st.month)))
+            obj["day"] = max(1, min(31, int(rule.get("day") or st.day)))
+        return obj
+
     for sec in data["sections"]:
         kids = children.get(str(sec["id"]), [])
         if sec["type"] == "project":
             sec["projects"] = [map_project(k) for k in kids]
+        elif sec["type"] == "recurring":
+            sec["recurrences"] = [map_recur(k) for k in kids]
         else:
             sec["events"] = [map_event(k) for k in kids]
 
@@ -288,7 +335,8 @@ def save_from_flat(flat, data):
         usage = {k: 0 for k in palette}
         targets = []
         for sec in data["sections"]:
-            for obj in sec.get("projects", []) + sec.get("events", []):
+            for obj in (sec.get("projects", []) + sec.get("events", [])
+                        + sec.get("recurrences", [])):
                 c = obj.get("color")
                 if c in usage:
                     usage[c] += 1
@@ -419,6 +467,37 @@ APP_HTML = r'''<!DOCTYPE html>
   .section-row .gantt_tree_content { color: #4338ca !important; font-size: 14px !important; letter-spacing: 0.5px; }
   .section-row-event { background: #fef3c7 !important; font-weight: 700 !important; border-top: 2px solid #fcd34d !important; }
   .section-row-event .gantt_tree_content { color: #92400e !important; font-size: 14px !important; letter-spacing: 0.5px; }
+  .section-row-recur { background: #ecfdf5 !important; font-weight: 700 !important; border-top: 2px solid #6ee7b7 !important; }
+  .section-row-recur .gantt_tree_content { color: #047857 !important; font-size: 14px !important; letter-spacing: 0.5px; }
+  body.dark .section-row-recur { background: #052e22 !important; border-top-color: #047857 !important; }
+  body.dark .section-row-recur .gantt_tree_content { color: #6ee7b7 !important; }
+
+  /* 반복 일정: 바 대신 회차마다 다이아몬드 */
+  .recur-row .gantt_tree_content { padding-left: 10px !important; }
+  .recur-dot {
+    position: absolute; width: 11px; height: 11px;
+    background: #6b7280; transform: rotate(45deg); border-radius: 2px;
+    pointer-events: none; z-index: 1;
+  }
+  .status-recur { background: #d1fae5; color: #047857; }
+
+  /* 반복 규칙 편집 컨트롤 */
+  .recur-block { border: none !important; padding: 2px 0 !important; }
+  .recur-block select, .recur-block input[type="number"] {
+    font-family: inherit; font-size: 13px; color: #1f2937;
+    border: 1px solid #e5e7eb; border-radius: 8px; padding: 5px 8px; margin-right: 6px;
+  }
+  .recur-row-line { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  .recur-row-line label { font-size: 12.5px; color: #374151; display: flex; align-items: center; gap: 4px; }
+  .wd-toggle {
+    display: inline-flex; width: 30px; height: 30px; align-items: center; justify-content: center;
+    border: 1px solid #e5e7eb; border-radius: 8px; cursor: pointer;
+    font-size: 12px; color: #6b7280; user-select: none;
+  }
+  .wd-toggle.on { background: #4f46e5; border-color: #4f46e5; color: #fff; font-weight: 700; }
+  .recur-preview { font-size: 12px; color: #9ca3af; margin-top: 8px; }
+  body.dark .recur-block select, body.dark .recur-block input[type="number"],
+  body.dark .wd-toggle { background: #0f172a; color: #e2e8f0; border-color: #334155; }
 
   .single-event-row .gantt_tree_content { padding-left: 10px !important; }
 
@@ -770,6 +849,8 @@ gantt.locale = {
     gantt_save_btn: "저장", gantt_cancel_btn: "취소", gantt_delete_btn: "삭제",
     section_description: "이름", section_time: "기간",
     section_evtime: "시간 (예: 10:00~11:30)",
+    section_recurrule: "반복 규칙",
+    section_recurspan: "반복 기간 (시작 ~ 종료)",
     section_color: "색상 테마",
     section_donebox: "완료 처리",
     section_undetbox: "일정 확정 여부",
@@ -845,6 +926,7 @@ gantt.config.columns = [
     editor: { type: "text", map_to: "text" } },
   { name: "status", label: "상태", align: "center", width: 60,
     template: function(task) {
+      if (task.is_recur) return '<span class="status-badge status-recur">반복</span>';
       var st = getTaskStatus(task);
       // 잎 항목은 뱃지 클릭으로 완료 토글 가능
       var canToggle = !task.is_section && !task.is_past_group &&
@@ -866,12 +948,14 @@ gantt.config.columns = [
   { name: "start_date", label: "시작", align: "center", width: 96,
     template: function(task) {
       if (task.is_section || task.is_past_group || task.unscheduled || !task.start_date) return "";
+      if (task.is_recur) return '<span style="font-size:11px;color:#6b7280">' + escHtml(task.recur_text || "") + '</span>';
       return gantt.templates.date_grid(task.start_date, task);
     }
   },
   { name: "duration", label: "기간(일)", align: "center", width: 70,
     template: function(task) {
       if (task.is_section || task.is_past_group || task.unscheduled) return "";
+      if (task.is_recur) return (task.occurrences ? task.occurrences.length : 0) + "회";
       if (task.is_single_event && task.start_date && task.end_date) {
         var d = Math.round((task.end_date - task.start_date) / 86400000);
         return d || 1;  // 일회성 일정은 주말 포함 달력일
@@ -893,7 +977,8 @@ gantt.config.columns = [
     template: function(task) {
       if (task.is_past_group) return "";
       var h = "<div class='row-acts'>";
-      var canAdd = !(task.kind === "task" || (task.kind === "event" && !task.is_section));
+      var canAdd = !(task.kind === "task" || task.kind === "recur" ||
+                     (task.kind === "event" && !task.is_section));
       if (task.is_section) {
         h += "<span class='grid-add' title='이 섹션에 항목 추가'>+</span>";
       } else {
@@ -991,6 +1076,8 @@ gantt.templates.grid_row_class = function(start, end, task) {
   var cls = [];
   if (task.is_section === 'project') cls.push("section-row");
   else if (task.is_section === 'event') cls.push("section-row-event");
+  else if (task.is_section === 'recurring') cls.push("section-row-recur");
+  else if (task.is_recur) cls.push("recur-row");
   else if (task.is_parent_project) cls.push("project-row");
   if (task.is_past_group) cls.push("past-group-row");
   if (task.is_sub_project) cls.push("sub-project-row");
@@ -1006,10 +1093,31 @@ gantt.templates.task_row_class = function(start, end, task) {
   var cls = [];
   if (task.is_section === 'project') cls.push("section-row");
   else if (task.is_section === 'event') cls.push("section-row-event");
+  else if (task.is_section === 'recurring') cls.push("section-row-recur");
   if (task.is_single_event) cls.push("single-event-row");
   if (task.custom_status === 'undetermined') cls.push("undetermined-row");
   return cls.join(" ");
 };
+
+// 반복 일정: 회차마다 다이아몬드 표시 (바 대신)
+gantt.addTaskLayer(function(task) {
+  if (!task.is_recur || !task.occurrences || !task.occurrences.length) return false;
+  var box = document.createElement("div");
+  var top = gantt.getTaskTop(task.id) + (gantt.config.row_height - 11) / 2;
+  task.occurrences.forEach(function(iso) {
+    var d = isoToDate(iso);
+    if (!d) return;
+    d.setHours(12, 0, 0, 0);
+    var x = gantt.posFromDate(d);
+    if (x < -20) return;
+    var dot = document.createElement("div");
+    dot.className = "recur-dot " + (task.color_class || "");
+    dot.style.left = (x - 5.5) + "px";
+    dot.style.top = top + "px";
+    box.appendChild(dot);
+  });
+  return box;
+});
 
 gantt.templates.task_text = function(start, end, task) { return ""; };
 gantt.templates.lightbox_header = function(start, end, task) {
@@ -1028,7 +1136,7 @@ gantt.templates.rightside_text = function(start, end, task) {
   return "";
 };
 gantt.templates.task_class = function(start, end, task) {
-  if (task.is_section || task.is_past_group) return "hide-bar";
+  if (task.is_section || task.is_past_group || task.is_recur) return "hide-bar";
   var cls = task.color_class || "";
   if (task.bar_level === 1) cls += " lv-project";
   else if (task.bar_level === 2) cls += " lv-subproject";
@@ -1043,6 +1151,12 @@ try {
   gantt.templates.tooltip_text = function(start, end, task) {
     if (task.is_section || task.is_past_group) return "";
     var h = "<b>" + escHtml(task.text) + "</b><br>";
+    if (task.is_recur) {
+      h += escHtml(task.recur_text || "반복") + "<br>총 " + (task.occurrences ? task.occurrences.length : 0) + "회";
+      if (task.custom_time) h += "<br>시간: " + escHtml(task.custom_time);
+      if (task.notes) h += "<br><br><b>메모:</b><br>" + escHtml(task.notes).replace(/\n/g, "<br>");
+      return h;
+    }
     if (task.custom_status === 'undetermined') {
       h += "기간: 미정";
     } else {
@@ -1321,6 +1435,128 @@ gantt.form_blocks["donetoggle"] = {
   focus: function(node) {}
 };
 
+// ── 커스텀 컨트롤: 반복 규칙 ──
+var WD_KO = ["일", "월", "화", "수", "목", "금", "토"];
+gantt.form_blocks["recurrule"] = {
+  render: function(sns) {
+    var h = "<div class='gantt_cal_ltext recur-block'>";
+    h += "<div class='recur-row-line'><select class='rc-freq'>" +
+         "<option value='weekly'>매주</option><option value='monthly'>매월</option>" +
+         "<option value='yearly'>매년</option></select>";
+    // 매주
+    h += "<span class='rc-weekly'><select class='rc-interval'>" +
+         "<option value='1'>매주</option><option value='2'>격주</option>" +
+         "<option value='3'>3주마다</option><option value='4'>4주마다</option></select></span></div>";
+    h += "<div class='recur-row-line rc-weekly'>";
+    WD_KO.forEach(function(w, i) {
+      h += "<span class='wd-toggle' data-wd='" + i + "'>" + w + "</span>";
+    });
+    h += "</div>";
+    // 매월
+    h += "<div class='recur-row-line rc-monthly'>" +
+         "<label><input type='radio' name='rc-mmode' value='day' checked> 매월</label>" +
+         "<select class='rc-mday'></select><span style='font-size:12.5px'>일</span>" +
+         "</div><div class='recur-row-line rc-monthly'>" +
+         "<label><input type='radio' name='rc-mmode' value='nth'> 매월</label>" +
+         "<select class='rc-nth'><option value='1'>첫째</option><option value='2'>둘째</option>" +
+         "<option value='3'>셋째</option><option value='4'>넷째</option><option value='-1'>마지막</option></select>" +
+         "<select class='rc-nwd'></select><span style='font-size:12.5px'>요일</span></div>";
+    // 매년
+    h += "<div class='recur-row-line rc-yearly'><select class='rc-ymonth'></select>" +
+         "<span style='font-size:12.5px'>월</span><select class='rc-yday'></select>" +
+         "<span style='font-size:12.5px'>일</span></div>";
+    h += "<div class='recur-preview'></div></div>";
+    return h;
+  },
+  set_value: function(node, value, task) {
+    var r = value || task.recur || { freq: "weekly", interval: 1, weekdays: [] };
+    function fill(sel, from, to, labels) {
+      var el = node.querySelector(sel);
+      if (el.options.length) return;
+      for (var i = from; i <= to; i++) {
+        el.innerHTML += "<option value='" + i + "'>" + (labels ? labels[i] : i) + "</option>";
+      }
+    }
+    fill(".rc-mday", 1, 31); fill(".rc-yday", 1, 31); fill(".rc-ymonth", 1, 12);
+    fill(".rc-nwd", 0, 6, WD_KO);
+
+    var start = task.start_date ? new Date(task.start_date) : new Date();
+    node.querySelector(".rc-freq").value = r.freq || "weekly";
+    node.querySelector(".rc-interval").value = String(r.interval || 1);
+    var wds = r.weekdays && r.weekdays.length ? r.weekdays : [start.getDay()];
+    node.querySelectorAll(".wd-toggle").forEach(function(el) {
+      el.classList.toggle("on", wds.indexOf(+el.dataset.wd) !== -1);
+    });
+    node.querySelector(".rc-mday").value = String(r.nth ? start.getDate() : (r.day || start.getDate()));
+    node.querySelector(".rc-nth").value = String(r.nth || 1);
+    node.querySelector(".rc-nwd").value = String(r.weekday !== undefined ? r.weekday : start.getDay());
+    node.querySelectorAll("input[name=rc-mmode]").forEach(function(el) {
+      el.checked = (el.value === (r.nth ? "nth" : "day"));
+    });
+    node.querySelector(".rc-ymonth").value = String(r.month || (start.getMonth() + 1));
+    node.querySelector(".rc-yday").value = String(r.freq === "yearly" && r.day ? r.day : start.getDate());
+
+    function sync() {
+      var f = node.querySelector(".rc-freq").value;
+      ["weekly", "monthly", "yearly"].forEach(function(k) {
+        node.querySelectorAll(".rc-" + k).forEach(function(el) {
+          el.style.display = (k === f) ? "" : "none";
+        });
+      });
+      node.querySelector(".recur-preview").textContent = "→ " + recurPreview(node);
+    }
+    if (!node._wired) {
+      node._wired = true;
+      node.addEventListener("change", sync);
+      node.addEventListener("click", function(ev) {
+        var t = ev.target.closest(".wd-toggle");
+        if (t) { t.classList.toggle("on"); sync(); }
+      });
+    }
+    sync();
+  },
+  get_value: function(node, task) {
+    var f = node.querySelector(".rc-freq").value;
+    var r = { freq: f };
+    if (f === "weekly") {
+      r.interval = +node.querySelector(".rc-interval").value;
+      r.weekdays = Array.prototype.map.call(node.querySelectorAll(".wd-toggle.on"),
+                                            function(e) { return +e.dataset.wd; });
+      if (!r.weekdays.length) r.weekdays = [new Date(task.start_date || Date.now()).getDay()];
+    } else if (f === "monthly") {
+      var mode = node.querySelector("input[name=rc-mmode]:checked").value;
+      if (mode === "nth") { r.nth = +node.querySelector(".rc-nth").value; r.weekday = +node.querySelector(".rc-nwd").value; }
+      else r.day = +node.querySelector(".rc-mday").value;
+    } else {
+      r.month = +node.querySelector(".rc-ymonth").value;
+      r.day = +node.querySelector(".rc-yday").value;
+    }
+    task.recur = r;         // 저장 객체에 직접 기록 (라이브러리 매핑에 의존하지 않음)
+    recurChanged = true;    // 저장 후 회차 재계산을 위해 새로고침 필요
+    return r;
+  },
+  focus: function(node) {}
+};
+function recurPreview(node) {
+  var f = node.querySelector(".rc-freq").value;
+  if (f === "weekly") {
+    var iv = +node.querySelector(".rc-interval").value;
+    var head = iv === 1 ? "매주" : (iv === 2 ? "격주" : iv + "주마다");
+    var days = Array.prototype.map.call(node.querySelectorAll(".wd-toggle.on"),
+                                        function(e) { return WD_KO[+e.dataset.wd]; }).join("");
+    return days ? head + " " + days : head;
+  }
+  if (f === "monthly") {
+    var mode = node.querySelector("input[name=rc-mmode]:checked").value;
+    if (mode === "nth") {
+      var n = node.querySelector(".rc-nth");
+      return "매월 " + n.options[n.selectedIndex].text + " " + WD_KO[+node.querySelector(".rc-nwd").value] + "요일";
+    }
+    return "매월 " + node.querySelector(".rc-mday").value + "일";
+  }
+  return "매년 " + node.querySelector(".rc-ymonth").value + "월 " + node.querySelector(".rc-yday").value + "일";
+}
+
 // ── 커스텀 컨트롤: 날짜 미정 토글 ──
 gantt.form_blocks["undettoggle"] = {
   render: function(sns) {
@@ -1342,6 +1578,19 @@ function setLightbox(kind, hasKids) {
   var secs = [
     { name: "description", height: 34, map_to: "text", type: "textarea", focus: true }
   ];
+  if (kind === "recur") {
+    // 반복 일정: 규칙 + 반복 기간(시작~종료) + 시간 + 색상 + 메모
+    secs.push({ name: "recurrule", height: 170, map_to: "recur", type: "recurrule" });
+    secs.push({ name: "recurspan", height: 262, type: "daterange", map_to: "auto" });
+    secs.push({ name: "evtime", height: 40, map_to: "custom_time", type: "timerange" });
+    secs.push({ name: "color", height: 44, map_to: "color_key", type: "colorpick" });
+    secs.push({ name: "notes", height: 72, map_to: "notes", type: "textarea" });
+    gantt.config.lightbox.sections = secs;
+    gantt.config.lightbox.project_sections = secs;
+    gantt.config.lightbox.milestone_sections = secs;
+    gantt.resetLightbox();
+    return;
+  }
   // 자식이 있는 항목의 기간은 하위 일정으로 자동 계산 — 직접 입력을 받지 않음
   // (입력해도 저장 시 롤업에 밀려 사라지는 무경고 유실 방지)
   if (!hasKids) secs.push({ name: "time", height: 262, type: "daterange", map_to: "auto" });
@@ -1394,6 +1643,12 @@ gantt.attachEvent("onAfterTaskDrag", function(id) {
   gantt.refreshTask(id);
 });
 gantt.attachEvent("onLightboxSave", function(id, task) {
+  if (task.kind === "recur") {
+    task.unscheduled = false;
+    task.type = "task";
+    recurChanged = true;  // 회차는 서버가 재계산 → 저장 후 새로고침
+    return true;
+  }
   // 잎 항목: 날짜가 지정되므로 unscheduled 해제.
   // '미정' 여부는 편집창의 체크박스(custom_status 매핑)를 그대로 따른다.
   if (!gantt.hasChild(id)) {
@@ -1458,6 +1713,17 @@ gantt.attachEvent("onTaskCreated", function(task) {
   var d1 = new Date(d0); d1.setDate(d1.getDate() + 1);
   task.start_date = d0;
   task.end_date = d1;
+  if (p.is_section === "recurring" || p.is_recur) {
+    // 새 반복 일정: 기본 매주(오늘 요일), 1년간
+    var end = new Date(d0); end.setFullYear(end.getFullYear() + 1);
+    task.kind = "recur"; task.text = "새 반복 일정"; task.is_recur = true;
+    task.bar_level = 3; task.custom_time = ""; task.notes = "";
+    task.end_date = end;
+    task.recur = { freq: "weekly", interval: 1, weekdays: [d0.getDay()] };
+    task.occurrences = [];
+    recurChanged = true;
+    return true;
+  }
   if (p.is_section === "event" || p.is_past_group) {
     task.kind = "event"; task.text = "새 일정"; task.duration = 1;
     task.custom_time = ""; task.is_single_event = true; task.bar_level = 3;
@@ -1626,6 +1892,7 @@ function expandAll() {
 
 // ── 변경 감지 · 자동 저장 · 토스트 ──
 var dirty = false;
+var recurChanged = false;  // 반복 규칙이 바뀌면 회차를 서버가 재계산 → 저장 후 새로고침
 var autosaveTimer = null;
 function markDirty() {
   dirty = true;
@@ -1671,7 +1938,12 @@ function saveAll(auto) {
       b.classList.remove("dirty");
       b.textContent = "저장";
       if (res.warn) alert(res.warn);  // 저장은 성공, 재빌드만 실패한 경우
-      if (auto) {
+      if (auto && recurChanged) {
+        recurChanged = false;
+        showToast("자동 저장됨");
+        snapshotView();
+        setTimeout(function() { location.reload(); }, 400);  // 회차 다이아몬드 갱신
+      } else if (auto) {
         showToast("자동 저장됨");  // 화면은 그대로 (재정렬은 다음 열 때)
       } else {
         showToast("저장 완료");

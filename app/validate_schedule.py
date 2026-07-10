@@ -56,6 +56,52 @@ def _check_leaf(obj, where, errors, require_dates):
         errors.append(f"{where}: status는 'undetermined'만 허용 ({status!r})")
 
 
+def _check_recur(rec, where, errors):
+    """반복 일정 규칙 검증"""
+    if not rec.get("start"):
+        errors.append(f"{where}: 시작일이 필요함")
+    else:
+        _check_date(rec["start"], where, errors)
+    if rec.get("end"):
+        _check_date(rec["end"], where, errors)
+        if rec.get("start") and str(rec["end"]) < str(rec["start"]):
+            errors.append(f"{where}: 종료일이 시작일보다 빠름")
+
+    freq = rec.get("freq")
+    if freq not in ("weekly", "monthly", "yearly"):
+        errors.append(f"{where}: freq는 weekly/monthly/yearly 중 하나여야 함 ({freq!r})")
+        return
+
+    def _int_in(key, lo, hi, required=False):
+        v = rec.get(key)
+        if v is None:
+            if required:
+                errors.append(f"{where}: {key} 필요")
+            return
+        if isinstance(v, bool) or not isinstance(v, int) or not (lo <= v <= hi):
+            errors.append(f"{where}: {key}는 {lo}~{hi} 범위의 정수여야 함 ({v!r})")
+
+    if freq == "weekly":
+        _int_in("interval", 1, 12)
+        wd = rec.get("weekdays")
+        if wd is not None:
+            if not isinstance(wd, list) or not wd:
+                errors.append(f"{where}: weekdays는 비어있지 않은 배열이어야 함")
+            elif any(isinstance(w, bool) or not isinstance(w, int) or not (0 <= w <= 6) for w in wd):
+                errors.append(f"{where}: weekdays는 0(일)~6(토) 정수여야 함 ({wd!r})")
+    elif freq == "monthly":
+        if rec.get("nth") is not None:
+            n = rec["nth"]
+            if isinstance(n, bool) or not isinstance(n, int) or not (n == -1 or 1 <= n <= 4):
+                errors.append(f"{where}: nth는 1~4 또는 -1(마지막)이어야 함 ({n!r})")
+            _int_in("weekday", 0, 6, required=True)
+        else:
+            _int_in("day", 1, 31, required=True)
+    elif freq == "yearly":
+        _int_in("month", 1, 12, required=True)
+        _int_in("day", 1, 31, required=True)
+
+
 def validate(data):
     """오류 메시지 리스트 반환 (비어 있으면 통과)"""
     errors = []
@@ -103,10 +149,20 @@ def validate(data):
             errors.append(f"{sw}: 객체가 아님")
             continue
         check_id(sec, sw, allow_reserved=True)
-        if sec.get("type") not in ("project", "event"):
-            errors.append(f"{sw}: type은 project/event 중 하나여야 함")
+        if sec.get("type") not in ("project", "event", "recurring"):
+            errors.append(f"{sw}: type은 project/event/recurring 중 하나여야 함")
         if not sec.get("title"):
             errors.append(f"{sw}: title 없음")
+
+        if sec.get("type") == "recurring":
+            for ri, rec in enumerate(check_list(sec, "recurrences", sw)):
+                rw = f"{sw}.반복[{ri}]({rec.get('title', '?')})"
+                check_id(rec, rw)
+                check_color(rec, rw)
+                if not rec.get("title"):
+                    errors.append(f"{rw}: title 없음")
+                _check_recur(rec, rw, errors)
+            continue
 
         if sec.get("type") == "project":
             for pi, proj in enumerate(check_list(sec, "projects", sw)):

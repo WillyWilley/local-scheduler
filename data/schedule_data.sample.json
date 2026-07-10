@@ -159,6 +159,35 @@
           "notes": "1박 2일, 장소 미정"
         }
       ]
+    },
+    {
+      "id": "sec-recur",
+      "title": "🔁 반복 일정",
+      "type": "recurring",
+      "recurrences": [
+        {
+          "id": 8,
+          "title": "주간 팀 회의",
+          "freq": "weekly",
+          "interval": 1,
+          "weekdays": [1],
+          "start": "2026-07-06",
+          "end": "2026-12-28",
+          "time": "10:00~11:00",
+          "color": "alpha"
+        },
+        {
+          "id": 9,
+          "title": "월간 실적 보고",
+          "freq": "monthly",
+          "day": 25,
+          "start": "2026-07-01",
+          "end": "2026-12-31",
+          "time": "14:00~15:00",
+          "color": "beta",
+          "notes": "전월 실적 정리 후 보고"
+        }
+      ]
     }
   ]
 }

@@ -19,7 +19,9 @@
 - `assets/` — 차트 라이브러리 (없으면 CDN 폴백), `logs/` — 실행 로그, `output/` — 빌드 산출물 (git 추적 제외)
 
 ## 데이터 규칙
-- 날짜는 `YYYY-MM-DD` (패딩 필수), 계층: `sections[] > projects[] > sub_projects[] > tasks[]` / `events[]`
+- 날짜는 `YYYY-MM-DD` (패딩 필수), 계층: `sections[] > projects[] > sub_projects[] > tasks[]` / `events[]` / `recurrences[]`
+- 반복 일정(`type: "recurring"`): 규칙만 저장하고 회차는 빌드 시 전개한다 (`freq`: weekly/monthly/yearly,
+  `weekdays`는 0=일…6=토, `nth`: 1~4 또는 -1=마지막). 회차는 데이터에 기록하지 않는다
 - `duration`: 장기 업무는 **주말 제외 근무일 수**, 일회성 일정(events)은 **주말 포함 달력일 수** (둘 다 시작일 포함)
 - `done: true` (선택) — 날짜와 무관하게 완료 처리 (상태 뱃지 클릭으로 토글). 없으면 날짜로 자동 판별. 부모의 done은 자식에서 파생되므로 JSON에 기록하지 않는다
 - `status: "undetermined"` (선택) — 미정 항목. 예상 날짜와 공존 가능하며, 라이트박스에서 날짜를 저장할 때만 해제된다
