@@ -290,6 +290,8 @@ def save_from_flat(flat, data):
             obj["start"] = s.strftime("%Y-%m-%d")
             obj["end"] = e.strftime("%Y-%m-%d")
         obj.setdefault("start", today_iso)
+        if node.get("recur_open"):
+            obj.pop("end", None)  # 무기한 반복: 종료일 없음
         t = (node.get("custom_time") or "").strip()
         if t:
             obj["time"] = t
@@ -561,9 +563,9 @@ APP_HTML = r'''<!DOCTYPE html>
     border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 700;
     color: #9ca3af; user-select: none;
   }
-  .grid-add:hover { color: #4f46e5; background: #eef2ff; }
+  .grid-add:hover, .grid-edit:hover { color: #4f46e5; background: #eef2ff; }
   .grid-del:hover { color: #dc2626; background: #fee2e2; }
-  body.dark .grid-add:hover { background: #1e1b4b; }
+  body.dark .grid-add:hover, body.dark .grid-edit:hover { background: #1e1b4b; }
   body.dark .grid-del:hover { background: #450a0a; }
 
   /* ── 편집창(라이트박스) 디자인 ── */
@@ -712,6 +714,30 @@ APP_HTML = r'''<!DOCTYPE html>
   .done-hint { font-size: 11.5px; color: #9ca3af; }
   body.dark .done-toggle { color: #cbd5e1; }
 
+  /* ── 앱 확인/알림 창 (브라우저 기본 팝업 대신) ── */
+  #dlgOverlay {
+    position: fixed; inset: 0; background: rgba(17,24,39,0.45); z-index: 900;
+    display: none; align-items: center; justify-content: center;
+  }
+  #dlgOverlay.show { display: flex; }
+  #dlgCard {
+    background: #fff; border-radius: 14px; width: 400px; max-width: 90vw;
+    padding: 20px 22px 16px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+  }
+  #dlgCard .dlg-title { font-size: 14px; font-weight: 700; color: #4f46e5; margin-bottom: 10px; }
+  #dlgCard .dlg-msg { font-size: 14px; color: #1f2937; line-height: 1.55; white-space: pre-wrap; }
+  #dlgCard .dlg-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  .dlg-ok {
+    padding: 6px 18px; border: none; border-radius: 8px; background: #4f46e5; color: #fff;
+    font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+  }
+  .dlg-ok:hover { background: #4338ca; }
+  .dlg-ok.danger { background: #dc2626; }
+  .dlg-ok.danger:hover { background: #b91c1c; }
+  body.dark #dlgCard { background: #1e293b; }
+  body.dark #dlgCard .dlg-msg { color: #e2e8f0; }
+  body.dark #dlgCard .dlg-title { color: #a5b4fc; }
+
   /* ── 주간 브리핑 모달 ── */
   #briefOverlay {
     position: fixed; inset: 0; background: rgba(17,24,39,0.45); z-index: 500;
@@ -818,6 +844,17 @@ APP_HTML = r'''<!DOCTYPE html>
 <div id="gantt_here"></div>
 <div id="toast"></div>
 
+<div id="dlgOverlay">
+  <div id="dlgCard">
+    <div class="dlg-title">업무 스케줄</div>
+    <div class="dlg-msg" id="dlgMsg"></div>
+    <div class="dlg-actions">
+      <button class="tool-btn" id="dlgCancel">취소</button>
+      <button class="dlg-ok" id="dlgOk">확인</button>
+    </div>
+  </div>
+</div>
+
 <div id="briefOverlay" onclick="if(event.target===this)this.classList.remove('show')">
   <div id="briefCard">
     <h2>주간 브리핑</h2>
@@ -850,6 +887,7 @@ gantt.locale = {
     section_description: "이름", section_time: "기간",
     section_evtime: "시간 (예: 10:00~11:30)",
     section_recurrule: "반복 규칙",
+    section_recuropen: "종료 방식",
     section_recurspan: "반복 기간 (시작 ~ 종료)",
     section_color: "색상 테마",
     section_donebox: "완료 처리",
@@ -949,9 +987,7 @@ gantt.config.columns = [
     template: function(task) {
       if (task.is_section || task.is_past_group || task.unscheduled || !task.start_date) return "";
       if (task.is_recur) {
-        var n = task.occurrences ? task.occurrences.length : 0;
-        return '<span style="font-size:11px;color:#6b7280">' + escHtml(task.recur_text || "") +
-               (n ? ' · ' + n + '회' : '') + '</span>';
+        return '<span style="font-size:11px;color:#6b7280">' + escHtml(task.recur_text || "") + '</span>';
       }
       return gantt.templates.date_grid(task.start_date, task);
     }
@@ -959,7 +995,10 @@ gantt.config.columns = [
   { name: "duration", label: "기간(일)", align: "center", width: 70,
     template: function(task) {
       if (task.is_section || task.is_past_group || task.unscheduled) return "";
-      if (task.is_recur) return "";  // 반복 일정은 기간 개념이 없음 (회차는 '시작' 열에 표시)
+      if (task.is_recur) {
+        if (task.recur_open) return '<span style="font-size:11px;color:#9ca3af">무기한</span>';
+        return (task.occurrences ? task.occurrences.length : 0) + "회";
+      }
       if (task.is_single_event && task.start_date && task.end_date) {
         var d = Math.round((task.end_date - task.start_date) / 86400000);
         return d || 1;  // 일회성 일정은 주말 포함 달력일
@@ -977,7 +1016,7 @@ gantt.config.columns = [
       return '<span style="font-size:11px;color:#6b7280" title="' + escHtml(task.notes).replace(/\n/g, '&#10;') + '">' + escHtml(short) + '</span>';
     }
   },
-  { name: "acts", label: "추가/삭제", align: "center", width: 64,
+  { name: "acts", label: "편집", align: "center", width: 84,
     template: function(task) {
       if (task.is_past_group) return "";
       var h = "<div class='row-acts'>";
@@ -987,6 +1026,7 @@ gantt.config.columns = [
         h += "<span class='grid-add' title='이 섹션에 항목 추가'>+</span>";
       } else {
         if (canAdd) h += "<span class='grid-add' title='하위 항목 추가'>+</span>";
+        h += "<span class='grid-edit' title='상세 편집'>✎</span>";
         h += "<span class='grid-del' title='이 항목 삭제'>✕</span>";
       }
       return h + "</div>";
@@ -1161,7 +1201,9 @@ try {
     if (task.is_section || task.is_past_group) return "";
     var h = "<b>" + escHtml(task.text) + "</b><br>";
     if (task.is_recur) {
-      h += escHtml(task.recur_text || "반복") + "<br>총 " + (task.occurrences ? task.occurrences.length : 0) + "회";
+      h += escHtml(task.recur_text || "반복");
+      h += task.recur_open ? "<br>종료일 없음 (무기한 반복)"
+                           : "<br>총 " + (task.occurrences ? task.occurrences.length : 0) + "회";
       if (task.custom_time) h += "<br>시간: " + escHtml(task.custom_time);
       if (task.notes) h += "<br><br><b>메모:</b><br>" + escHtml(task.notes).replace(/\n/g, "<br>");
       return h;
@@ -1566,6 +1608,36 @@ function recurPreview(node) {
   return "매년 " + node.querySelector(".rc-ymonth").value + "월 " + node.querySelector(".rc-yday").value + "일";
 }
 
+// ── 커스텀 컨트롤: 무기한 반복 토글 ──
+gantt.form_blocks["recuropen"] = {
+  render: function(sns) {
+    return "<div class='gantt_cal_ltext done-block'>" +
+      "<label class='done-toggle'><input type='checkbox' class='recur-open-check'>" +
+      "<span>종료일 없이 계속 반복 (무기한)</span></label></div>";
+  },
+  set_value: function(node, value, task) {
+    var el = node.querySelector(".recur-open-check");
+    el.checked = !!value;
+    if (!node._wired) {
+      node._wired = true;
+      el.addEventListener("change", function() {
+        // 무기한이면 종료일 입력이 의미 없으므로 흐리게
+        var span = document.querySelector(".daterange-block");
+        if (span) span.style.opacity = el.checked ? "0.45" : "1";
+      });
+    }
+    var span = document.querySelector(".daterange-block");
+    if (span) span.style.opacity = el.checked ? "0.45" : "1";
+  },
+  get_value: function(node, task) {
+    var v = node.querySelector(".recur-open-check").checked;
+    task.recur_open = v;   // 저장 객체에 직접 기록
+    recurChanged = true;
+    return v;
+  },
+  focus: function(node) {}
+};
+
 // ── 커스텀 컨트롤: 날짜 미정 토글 ──
 gantt.form_blocks["undettoggle"] = {
   render: function(sns) {
@@ -1590,6 +1662,7 @@ function setLightbox(kind, hasKids) {
   if (kind === "recur") {
     // 반복 일정: 규칙 + 반복 기간(시작~종료) + 시간 + 색상 + 메모
     secs.push({ name: "recurrule", height: 170, map_to: "recur", type: "recurrule" });
+    secs.push({ name: "recuropen", height: 34, map_to: "recur_open", type: "recuropen" });
     secs.push({ name: "recurspan", height: 262, type: "daterange", map_to: "auto" });
     secs.push({ name: "evtime", height: 40, map_to: "custom_time", type: "timerange" });
     secs.push({ name: "color", height: 44, map_to: "color_key", type: "colorpick" });
@@ -1675,10 +1748,16 @@ gantt.attachEvent("onTaskClick", function(id, e) {
     gantt.createTask({}, id);  // 이 행 아래에 새 항목 (편집창 자동 오픈)
     return false;
   }
+  if (e.target.closest(".grid-edit")) {
+    gantt.showLightbox(id);
+    return false;
+  }
   if (e.target.closest(".grid-del")) {
     var dt = gantt.getTask(id);
-    if (!dt.is_section && !dt.is_past_group && confirm('"' + dt.text + '" 항목을 삭제할까요?')) {
-      gantt.deleteTask(id);
+    if (!dt.is_section && !dt.is_past_group) {
+      appConfirm('"' + dt.text + '" 항목을 삭제할까요?',
+                 function() { gantt.deleteTask(id); },
+                 { okText: "삭제", danger: true });
     }
     return false;
   }
@@ -1929,6 +2008,37 @@ function showToast(msg) {
   setTimeout(function() { t.classList.remove("show"); }, 2200);
 }
 
+// ── 앱 확인/알림 창 (브라우저 기본 팝업은 "127.0.0.1의 메시지"로 뜬다) ──
+var _dlgCb = null;
+function appDialog(msg, opts) {
+  opts = opts || {};
+  var ov = document.getElementById("dlgOverlay");
+  document.getElementById("dlgMsg").textContent = msg;
+  var ok = document.getElementById("dlgOk"), cancel = document.getElementById("dlgCancel");
+  ok.textContent = opts.okText || "확인";
+  ok.classList.toggle("danger", !!opts.danger);
+  cancel.style.display = opts.alertOnly ? "none" : "";
+  _dlgCb = opts.onOk || null;
+  ov.classList.add("show");
+  ok.focus();
+}
+function appConfirm(msg, onOk, opts) {
+  opts = opts || {};
+  opts.onOk = onOk;
+  appDialog(msg, opts);
+}
+function appAlert(msg) { appDialog(msg, { alertOnly: true }); }
+function closeDialog(run) {
+  document.getElementById("dlgOverlay").classList.remove("show");
+  var cb = _dlgCb; _dlgCb = null;
+  if (run && cb) cb();
+}
+document.addEventListener("DOMContentLoaded", function() {
+  document.getElementById("dlgOk").onclick = function() { closeDialog(true); };
+  document.getElementById("dlgCancel").onclick = function() { closeDialog(false); };
+  document.getElementById("dlgOverlay").onclick = function(e) { if (e.target === this) closeDialog(false); };
+});
+
 function saveAll(auto) {
   clearTimeout(autosaveTimer);
   if (!dirty) {
@@ -1947,7 +2057,7 @@ function saveAll(auto) {
       var b = document.getElementById("saveBtn");
       b.classList.remove("dirty");
       b.textContent = "저장";
-      if (res.warn) alert(res.warn);  // 저장은 성공, 재빌드만 실패한 경우
+      if (res.warn) appAlert(res.warn);  // 저장은 성공, 재빌드만 실패한 경우
       if (auto && recurChanged) {
         recurChanged = false;
         showToast("자동 저장됨");
@@ -1969,11 +2079,11 @@ function saveAll(auto) {
 }
 function discardAll() {
   if (!dirty) { showToast("변경사항이 없습니다"); return; }
-  if (confirm("저장하지 않은 변경사항을 버리고 다시 불러올까요?")) {
+  appConfirm("저장하지 않은 변경사항을 버리고 다시 불러올까요?", function() {
     dirty = false;
     snapshotView();
     location.reload();
-  }
+  }, { okText: "되돌리기", danger: true });
 }
 
 // ── 단축키: Ctrl+S 저장, Ctrl+Z/Y 실행취소, Delete 삭제 ──
@@ -1999,8 +2109,10 @@ document.addEventListener("keydown", function(e) {
     var sel = gantt.getState().selected_task;
     if (sel && gantt.isTaskExists(sel)) {
       var t = gantt.getTask(sel);
-      if (!t.is_section && !t.is_past_group && confirm('"' + t.text + '" 항목을 삭제할까요?')) {
-        gantt.deleteTask(sel);
+      if (!t.is_section && !t.is_past_group) {
+        appConfirm('"' + t.text + '" 항목을 삭제할까요?',
+                   function() { gantt.deleteTask(sel); },
+                   { okText: "삭제", danger: true });
       }
     }
   }

@@ -585,6 +585,7 @@ def build_gantt_data(data: dict) -> list:
                               if k in ("freq", "interval", "weekdays", "day", "nth", "weekday", "month")},
                     "recur_text": recur_summary(rec),
                     "occurrences": [d.strftime("%Y-%m-%d") for d in occ],
+                    "recur_open": not rec.get("end"),  # 종료일 없음 = 무기한 반복
                 }
                 # 규칙 기간을 행의 범위로 (바는 숨기고 회차 다이아몬드만 그림)
                 s = datetime.strptime(rec["start"], "%Y-%m-%d")
@@ -874,9 +875,7 @@ gantt.config.columns = [
     template: function(task) {
       if (task.is_section || task.is_past_group) return "";
       if (task.is_recur) {
-        var n = task.occurrences ? task.occurrences.length : 0;
-        return '<span style="font-size:11px;color:#6b7280">' + escHtml(task.recur_text || "") +
-               (n ? ' · ' + n + '회' : '') + '</span>';
+        return '<span style="font-size:11px;color:#6b7280">' + escHtml(task.recur_text || "") + '</span>';
       }
       return gantt.templates.date_grid(task.start_date, task);
     }
@@ -884,7 +883,10 @@ gantt.config.columns = [
   { name: "duration", label: "기간(일)", align: "center", width: 90,
     template: function(task) {
       if (task.is_section || task.is_past_group) return "";
-      if (task.is_recur) return "";  // 반복 일정은 기간 개념이 없음 (회차는 '시작' 열에 표시)
+      if (task.is_recur) {
+        if (task.recur_open) return '<span style="font-size:11px;color:#9ca3af">무기한</span>';
+        return (task.occurrences ? task.occurrences.length : 0) + "회";
+      }
       if (task.is_single_event && task.start_date && task.end_date) {
         var d = Math.round((task.end_date - task.start_date) / 86400000);
         return d || 1;  // 일회성 일정은 주말 포함 달력일
@@ -1059,7 +1061,8 @@ try {
     var h = "<b>" + escHtml(task.text) + "</b><br>";
     if (task.is_recur) {
       h += escHtml(task.recur_text || "반복");
-      h += "<br>총 " + (task.occurrences ? task.occurrences.length : 0) + "회";
+      h += task.recur_open ? "<br>종료일 없음 (무기한 반복)"
+                           : "<br>총 " + (task.occurrences ? task.occurrences.length : 0) + "회";
       if (task.custom_time) h += "<br>시간: " + escHtml(task.custom_time);
       if (task.notes) h += "<br><br><b>메모:</b><br>" + escHtml(task.notes).replace(/\n/g, "<br>");
       return h;
