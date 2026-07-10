@@ -1001,24 +1001,29 @@ gantt.templates.task_row_class = function(start, end, task) {
   return cls.join(" ");
 };
 
-// 반복 일정: 회차마다 다이아몬드 표시 (바 대신)
-gantt.addTaskLayer(function(task) {
-  if (!task.is_recur || !task.occurrences || !task.occurrences.length) return false;
-  var box = document.createElement("div");
-  var top = gantt.getTaskTop(task.id) + (gantt.config.row_height - 11) / 2;
-  task.occurrences.forEach(function(iso) {
-    var p = iso.split("-");
-    var d = new Date(+p[0], +p[1] - 1, +p[2], 12, 0, 0);
-    var x = gantt.posFromDate(d);
-    if (x < -20) return;
-    var dot = document.createElement("div");
-    dot.className = "recur-dot " + (task.color_class || "");
-    dot.style.left = (x - 5.5) + "px";
-    dot.style.top = top + "px";
-    box.appendChild(dot);
+// 반복 일정: 회차마다 다이아몬드를 타임라인에 직접 그린다
+// (이 dhtmlx 판에는 addTaskLayer API가 없어 오늘 선과 같은 방식 사용)
+function renderRecurDots() {
+  var area = document.querySelector(".gantt_bars_area") || document.querySelector(".gantt_task");
+  if (!area) return;
+  Array.prototype.forEach.call(area.querySelectorAll(".recur-dot"), function(el) { el.remove(); });
+  gantt.eachTask(function(task) {
+    if (!task.is_recur || !task.occurrences || !task.occurrences.length) return;
+    if (!gantt.isTaskVisible(task.id)) return;
+    var top = gantt.getTaskTop(task.id) + (gantt.config.row_height - 11) / 2;
+    task.occurrences.forEach(function(iso) {
+      var p = iso.split("-");
+      var d = new Date(+p[0], +p[1] - 1, +p[2], 12, 0, 0);
+      var x = gantt.posFromDate(d);
+      if (x < -20) return;
+      var dot = document.createElement("div");
+      dot.className = "recur-dot " + (task.color_class || "");
+      dot.style.left = (x - 5.5) + "px";
+      dot.style.top = top + "px";
+      area.appendChild(dot);
+    });
   });
-  return box;
-});
+}
 
 // 바 위 텍스트 숨기기
 gantt.templates.task_text = function(start, end, task) { return ""; };
@@ -1070,7 +1075,7 @@ try {
 // 초기화
 gantt.init("gantt_here");
 
-// 오늘 표시선
+// 오늘 표시선 + 반복 일정 다이아몬드
 gantt.attachEvent("onGanttRender", function() {
   var today = new Date();
   var areaEl = document.querySelector(".gantt_task");
@@ -1084,6 +1089,7 @@ gantt.attachEvent("onGanttRender", function() {
     line.style.cssText = "position:absolute;top:0;left:"+pos+"px;width:2px;height:100%;background:#4f46e5;opacity:0.5;z-index:5;pointer-events:none;";
     areaEl.appendChild(line);
   }
+  try { renderRecurDots(); } catch(e) {}
 });
 
 // ============ 데이터 (빌드 시 자동 생성) ============
