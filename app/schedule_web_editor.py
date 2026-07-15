@@ -1759,7 +1759,13 @@ gantt.attachEvent("onLightboxSave", function(id, task) {
 // ── 행 버튼(+/✕) 및 상태 뱃지 클릭 처리 ──
 gantt.attachEvent("onTaskClick", function(id, e) {
   if (e.target.closest(".grid-add")) {
-    gantt.createTask({}, id);  // 이 행 아래에 새 항목 (편집창 자동 오픈)
+    // 새 항목은 '지난 일정' 그룹 위에 삽입 (있으면 그 앞 인덱스에)
+    var idx;
+    var kids = gantt.getChildren(id);
+    for (var ki = 0; ki < kids.length; ki++) {
+      if (gantt.getTask(kids[ki]).is_past_group) { idx = ki; break; }
+    }
+    gantt.createTask({}, id, idx);  // 이 행 아래에 새 항목 (편집창 자동 오픈)
     return false;
   }
   if (e.target.closest(".grid-edit")) {
