@@ -353,6 +353,26 @@ def save_from_flat(flat, data):
     return data
 
 
+def apply_day_notes(data, day_notes):
+    """앱이 보낸 {날짜: 메모} 맵을 day_notes 배열로 반영.
+    None이면 구형 페이로드이므로 기존 메모를 그대로 둔다."""
+    if day_notes is None:
+        return
+    if not isinstance(day_notes, dict):
+        raise ValueError("day_notes 형식 오류 (객체가 아님)")
+    out = []
+    for date, text in day_notes.items():
+        date = str(date).strip()
+        text = str(text or "").strip()
+        if date and text:                       # 빈 메모는 삭제로 취급
+            out.append({"date": date, "text": text})
+    out.sort(key=lambda n: n["date"])
+    if out:
+        data["day_notes"] = out
+    else:
+        data.pop("day_notes", None)             # 하나도 없으면 키 자체를 지운다
+
+
 def merge_new_colors(data, new_colors):
     """앱에서 추가한 새 색상을 팔레트에 병합 (키·색상값 검증)"""
     colors = data.setdefault("colors", {})
@@ -499,6 +519,43 @@ APP_HTML = r'''<!DOCTYPE html>
   }
   .wd-toggle.on { background: #4f46e5; border-color: #4f46e5; color: #fff; font-weight: 700; }
   .recur-preview { font-size: 12px; color: #9ca3af; margin-top: 8px; }
+
+  /* 날짜 메모: 눈금에는 메모지 표식만, 내용은 클릭해야 보인다 */
+  .day-note-mark {
+    position: absolute; top: 1px; right: 2px;
+    font-size: 10px; line-height: 1; cursor: pointer; opacity: 0.85;
+    transition: transform 0.12s;
+  }
+  .day-note-mark:hover { opacity: 1; transform: scale(1.3); }
+  .gantt_scale_cell { cursor: pointer; }
+  .day-note-pop {
+    position: fixed; z-index: 40; width: 264px; display: none;
+    background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.16); padding: 12px;
+  }
+  .day-note-pop.show { display: block; }
+  .day-note-pop h4 { margin: 0 0 8px; font-size: 12.5px; color: #4f46e5; font-weight: 700; }
+  .day-note-pop .dn-text {
+    font-size: 13px; color: #374151; white-space: pre-wrap;
+    word-break: break-word; max-height: 220px; overflow: auto;
+  }
+  .day-note-pop textarea {
+    width: 100%; box-sizing: border-box; min-height: 84px; resize: vertical;
+    font: inherit; font-size: 13px; padding: 6px 8px;
+    border: 1px solid #d1d5db; border-radius: 6px;
+  }
+  .day-note-pop .dn-row { display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px; }
+  .day-note-pop button {
+    font-size: 12px; padding: 4px 10px; border-radius: 6px;
+    border: 1px solid #d1d5db; background: #f9fafb; cursor: pointer;
+  }
+  .day-note-pop button.primary { background: #4f46e5; border-color: #4f46e5; color: #fff; }
+  .day-note-pop button.danger { color: #dc2626; }
+  body.dark .day-note-pop { background: #1e293b; border-color: #334155; }
+  body.dark .day-note-pop .dn-text { color: #e2e8f0; }
+  body.dark .day-note-pop textarea,
+  body.dark .day-note-pop button { background: #0f172a; border-color: #334155; color: #e2e8f0; }
+  body.dark .day-note-pop button.primary { background: #4f46e5; border-color: #4f46e5; color: #fff; }
   body.dark .recur-block select, body.dark .recur-block input[type="number"],
   body.dark .wd-toggle { background: #0f172a; color: #e2e8f0; border-color: #334155; }
 
@@ -845,6 +902,21 @@ APP_HTML = r'''<!DOCTYPE html>
 <div id="gantt_here"></div>
 <div id="toast"></div>
 
+<div class="day-note-pop" id="dayNotePop">
+  <h4 id="dnDate"></h4>
+  <div class="dn-text" id="dnView"></div>
+  <textarea id="dnEdit" placeholder="이 날짜에 남길 메모"></textarea>
+  <div class="dn-row" id="dnViewRow">
+    <button class="danger" onclick="dnDelete()">삭제</button>
+    <button onclick="dnStartEdit()">수정</button>
+    <button class="primary" onclick="dnClose()">닫기</button>
+  </div>
+  <div class="dn-row" id="dnEditRow">
+    <button onclick="dnClose()">취소</button>
+    <button class="primary" onclick="dnSave()">저장</button>
+  </div>
+</div>
+
 <div id="dlgOverlay">
   <div id="dlgCard">
     <div class="dlg-title">업무 스케줄</div>
@@ -1089,10 +1161,22 @@ function holidayName(date) {
   return HOLIDAYS[k] || "";
 }
 function isHoliday(date) { return !!holidayName(date); }
+
+// ── 날짜 메모 ── 항목이 아니라 달력의 특정 날짜에 붙는 메모 (날짜당 하나)
+var DAY_NOTES = {{DAY_NOTES}};  // {날짜: 메모}
+function isoOf(date) {
+  return date.getFullYear() + "-" + ("0" + (date.getMonth() + 1)).slice(-2) +
+         "-" + ("0" + date.getDate()).slice(-2);
+}
+// 메모가 있는 날짜에만 붙는 작은 메모지 표식 (내용은 클릭해야 보인다)
+function noteMark(date) {
+  return DAY_NOTES[isoOf(date)] ? "<span class='day-note-mark' title='메모 (클릭해서 보기)'>📝</span>" : "";
+}
+
 function dayScaleFormat(date) {
   var h = holidayName(date);
-  if (h) return "<div class='hd'><span class='hd-d'>" + date.getDate() + "</span><span class='hd-n'>" + h + "</span></div>";
-  return date.getDate() + "(" + gantt.locale.date.day_short[date.getDay()] + ")";
+  if (h) return "<div class='hd'><span class='hd-d'>" + date.getDate() + "</span><span class='hd-n'>" + h + "</span></div>" + noteMark(date);
+  return date.getDate() + "(" + gantt.locale.date.day_short[date.getDay()] + ")" + noteMark(date);
 }
 gantt.templates.scale_cell_class = function(date) {
   if (isHoliday(date)) return "holiday";
@@ -1170,6 +1254,55 @@ function renderRecurDots() {
     });
   });
 }
+
+// ── 날짜 메모: 눈금 클릭으로 보기/추가 ──
+var dnCur = null;  // 팝업이 열려 있는 날짜 (없으면 null)
+function dnEl(id) { return document.getElementById(id); }
+function dnClose() { dnEl("dayNotePop").classList.remove("show"); dnCur = null; }
+function dnRender(edit) {
+  dnEl("dnView").style.display    = edit ? "none" : "";
+  dnEl("dnEdit").style.display    = edit ? "" : "none";
+  dnEl("dnViewRow").style.display = edit ? "none" : "";
+  dnEl("dnEditRow").style.display = edit ? "" : "none";
+  if (edit) { dnEl("dnEdit").value = DAY_NOTES[dnCur] || ""; dnEl("dnEdit").focus(); }
+  else dnEl("dnView").textContent = DAY_NOTES[dnCur] || "";
+}
+function dnStartEdit() { dnRender(true); }
+function dnOpen(iso, anchor) {
+  dnCur = iso;
+  var d = isoToDate(iso);
+  dnEl("dnDate").textContent = iso + (d ? " (" + gantt.locale.date.day_short[d.getDay()] + ")" : "");
+  var pop = dnEl("dayNotePop");
+  pop.classList.add("show");
+  var r = anchor.getBoundingClientRect();  // 화면 밖으로 나가지 않게 보정
+  pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 12)) + "px";
+  pop.style.top  = Math.min(r.bottom + 6, window.innerHeight - pop.offsetHeight - 12) + "px";
+  dnRender(!DAY_NOTES[iso]);  // 메모가 없는 날짜면 바로 입력 상태로
+}
+function dnSave() {
+  var v = dnEl("dnEdit").value.trim();
+  if (v) DAY_NOTES[dnCur] = v; else delete DAY_NOTES[dnCur];
+  markDirty();
+  gantt.render();
+  dnClose();
+}
+function dnDelete() {
+  if (!DAY_NOTES[dnCur]) { dnClose(); return; }
+  delete DAY_NOTES[dnCur];
+  markDirty();
+  gantt.render();
+  dnClose();
+}
+document.addEventListener("click", function(e) {
+  var pop = dnEl("dayNotePop");
+  if (!pop) return;
+  if (pop.contains(e.target)) return;             // 팝업 내부 조작은 통과
+  var cell = e.target.closest && e.target.closest(".gantt_scale_cell");
+  if (!cell) { dnClose(); return; }               // 바깥 클릭 = 닫기
+  if (currentScale !== "day") return;             // 주간·월간 눈금은 하루로 특정되지 않음
+  var d = gantt.dateFromPos(cell.offsetLeft + 2);
+  if (d) dnOpen(isoOf(d), cell);
+}, false);
 
 // 회차 다이아몬드 더블클릭 = 반복 일정 편집 (한 번만 등록)
 document.addEventListener("dblclick", function(e) {
@@ -2069,6 +2202,7 @@ function saveAll(auto) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ tasks: gantt.serialize().data, colors: NEW_COLORS,
+                           day_notes: DAY_NOTES,
                            data_token: DATA_TOKEN, app_version: APP_VER })
   }).then(function(r) { return r.json(); }).then(function(res) {
     if (res.ok) {
@@ -2289,6 +2423,8 @@ def render_app():
     html = html.replace("{{COLOR_CSS}}", bs.build_color_css(data.get("colors", {})))
     html = html.replace("{{LAST_UPDATED}}", data.get("last_updated", ""))
     html = html.replace("{{HOLIDAYS}}", json.dumps(bs.load_holidays(), ensure_ascii=False))
+    html = html.replace("{{DAY_NOTES}}",
+                        json.dumps(bs.day_note_map(data), ensure_ascii=False).replace("</", "<\\/"))
     html = html.replace("{{DATA_TOKEN}}", data_token())
     html = html.replace("{{APP_VERSION}}", APP_VERSION)
     # 로컬 자산이 없으면(공개 저장소에서 갓 받은 경우 등) CDN으로 폴백
@@ -2379,6 +2515,7 @@ class Handler(BaseHTTPRequestHandler):
             if isinstance(payload, dict) and "tasks" in payload:
                 flat = payload["tasks"]
                 new_colors = payload.get("colors") or {}
+                day_notes = payload.get("day_notes")
                 # 낙관적 잠금: 페이지가 로드된 이후 데이터가 다른 곳에서 바뀌었으면 거부
                 token = payload.get("data_token")
                 if token and token != data_token():
@@ -2391,6 +2528,7 @@ class Handler(BaseHTTPRequestHandler):
             else:  # 구형 페이로드 (배열)
                 flat = payload
                 new_colors = {}
+                day_notes = None
 
             warn = ""
             with SAVE_LOCK:  # 동시 저장 직렬화
@@ -2398,6 +2536,7 @@ class Handler(BaseHTTPRequestHandler):
                     data = json.load(f)
                 merge_new_colors(data, new_colors)
                 data = save_from_flat(flat, data)
+                apply_day_notes(data, day_notes)
 
                 errors = validate_schedule.validate(data)
                 if errors:

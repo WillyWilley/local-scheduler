@@ -193,6 +193,29 @@ def validate(data):
                     errors.append(f"{ew}: title 없음")
                 _check_leaf(evt, ew, errors, require_dates=True)
 
+    # 날짜 메모 — 항목이 아니라 달력의 특정 날짜에 붙는 메모 (날짜당 하나)
+    notes = data.get("day_notes")
+    if notes is not None:
+        if not isinstance(notes, list):
+            errors.append(f"day_notes는 배열이어야 함 ({type(notes).__name__})")
+        else:
+            seen_dates = set()
+            for ni, note in enumerate(notes):
+                nw = f"날짜메모[{ni}]"
+                if not isinstance(note, dict):
+                    errors.append(f"{nw}: 객체가 아님 ({note!r})")
+                    continue
+                date = note.get("date")
+                if not date:
+                    errors.append(f"{nw}: date 없음")
+                else:
+                    _check_date(date, nw, errors)
+                    if str(date) in seen_dates:
+                        errors.append(f"{nw}: 같은 날짜에 메모가 둘 이상 ({date})")
+                    seen_dates.add(str(date))
+                if not str(note.get("text", "")).strip():
+                    errors.append(f"{nw}: text 없음 (빈 메모는 저장하지 않음)")
+
     return errors
 
 

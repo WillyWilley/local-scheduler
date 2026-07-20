@@ -99,6 +99,19 @@ def load_holidays():
     return merged
 
 
+def day_note_map(data):
+    """day_notes 배열 → {날짜: 메모} 맵. 빈 메모는 버린다 (날짜당 하나)."""
+    out = {}
+    for note in data.get("day_notes") or []:
+        if not isinstance(note, dict):
+            continue
+        date = str(note.get("date") or "").strip()
+        text = str(note.get("text") or "").strip()
+        if date and text:
+            out[date] = text
+    return out
+
+
 def refresh_holidays(force=False):
     """공휴일 자동 갱신 (무료 공개 API, 키 불필요).
     캐시가 없거나 30일 넘게 오래됐거나 내년 데이터가 빠졌을 때만 네트워크 호출.
@@ -702,6 +715,25 @@ HTML_TEMPLATE = r'''<!DOCTYPE html>
   .past-group-row { background: #f9fafb !important; }
   .past-group-row .gantt_tree_content { color: #9ca3af !important; font-size: 12px !important; font-weight: 500; }
 
+  /* 날짜 메모: 눈금에는 메모지 표식만, 내용은 클릭해야 보인다 */
+  .day-note-mark {
+    position: absolute; top: 1px; right: 2px;
+    font-size: 10px; line-height: 1; cursor: pointer; opacity: 0.85;
+    transition: transform 0.12s;
+  }
+  .day-note-mark:hover { opacity: 1; transform: scale(1.3); }
+  .day-note-pop {
+    position: fixed; z-index: 40; width: 264px; display: none;
+    background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.16); padding: 12px;
+  }
+  .day-note-pop.show { display: block; }
+  .day-note-pop h4 { margin: 0 0 8px; font-size: 12.5px; color: #4f46e5; font-weight: 700; }
+  .day-note-pop .dn-text {
+    font-size: 13px; color: #374151; white-space: pre-wrap;
+    word-break: break-word; max-height: 220px; overflow: auto;
+  }
+
   .gantt_task_line.hide-bar { display: none !important; }
   .section-row .gantt_task_line { display: none !important; }
 
@@ -787,6 +819,11 @@ HTML_TEMPLATE = r'''<!DOCTYPE html>
 </div>
 
 <div id="gantt_here"></div>
+
+<div class="day-note-pop" id="dayNotePop">
+  <h4 id="dnDate"></h4>
+  <div class="dn-text" id="dnView"></div>
+</div>
 
 <script>
 // 한글 로케일
@@ -951,11 +988,42 @@ function holidayName(date) {
   return HOLIDAYS[k] || "";
 }
 function isHoliday(date) { return !!holidayName(date); }
+
+// 날짜 메모 (보기 전용) — 눈금에는 표식만, 내용은 클릭해야 보인다
+var DAY_NOTES = {{DAY_NOTES}};  // {날짜: 메모}
+function isoOf(date) {
+  return date.getFullYear() + "-" + ("0" + (date.getMonth() + 1)).slice(-2) +
+         "-" + ("0" + date.getDate()).slice(-2);
+}
+function noteMark(date) {
+  return DAY_NOTES[isoOf(date)] ? "<span class='day-note-mark' title='메모 (클릭해서 보기)'>📝</span>" : "";
+}
+
 function dayScaleFormat(date) {
   var h = holidayName(date);
-  if (h) return "<div class='hd'><span class='hd-d'>" + date.getDate() + "</span><span class='hd-n'>" + h + "</span></div>";
-  return date.getDate() + "(" + gantt.locale.date.day_short[date.getDay()] + ")";
+  if (h) return "<div class='hd'><span class='hd-d'>" + date.getDate() + "</span><span class='hd-n'>" + h + "</span></div>" + noteMark(date);
+  return date.getDate() + "(" + gantt.locale.date.day_short[date.getDay()] + ")" + noteMark(date);
 }
+
+// 표식 클릭 = 메모 내용 보기 (정적 뷰어는 편집 없음)
+document.addEventListener("click", function(e) {
+  var pop = document.getElementById("dayNotePop");
+  if (!pop || pop.contains(e.target)) return;
+  var mark = e.target.closest && e.target.closest(".day-note-mark");
+  if (!mark) { pop.classList.remove("show"); return; }
+  var cell = mark.closest(".gantt_scale_cell");
+  var d = cell ? gantt.dateFromPos(cell.offsetLeft + 2) : null;
+  if (!d) return;
+  var iso = isoOf(d);
+  if (!DAY_NOTES[iso]) return;
+  document.getElementById("dnDate").textContent =
+    iso + " (" + gantt.locale.date.day_short[d.getDay()] + ")";
+  document.getElementById("dnView").textContent = DAY_NOTES[iso];
+  pop.classList.add("show");
+  var r = mark.getBoundingClientRect();
+  pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 12)) + "px";
+  pop.style.top  = Math.min(r.bottom + 6, window.innerHeight - pop.offsetHeight - 12) + "px";
+}, false);
 gantt.templates.scale_cell_class = function(date) {
   if (isHoliday(date)) return "holiday";
   if (date.getDay() === 0) return "weekend sunday";
@@ -1203,6 +1271,8 @@ def main():
     html = html.replace("{{COLOR_CSS}}", color_css)
     html = html.replace("{{LAST_UPDATED}}", last_updated)
     html = html.replace("{{HOLIDAYS}}", json.dumps(load_holidays(), ensure_ascii=False))
+    html = html.replace("{{DAY_NOTES}}",
+                        json.dumps(day_note_map(data), ensure_ascii=False).replace("</", "<\\/"))
 
     # 원자적 쓰기: 재빌드 도중 프로세스가 종료돼도 공유용 HTML이 절반만 남지 않도록
     os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
