@@ -1255,7 +1255,7 @@ function renderRecurDots() {
   });
 }
 
-// ── 날짜 메모: 눈금 클릭으로 보기/추가 ──
+// ── 날짜 메모: 눈금·타임라인 빈칸 클릭으로 보기/추가 ──
 var dnCur = null;  // 팝업이 열려 있는 날짜 (없으면 null)
 function dnEl(id) { return document.getElementById(id); }
 function dnClose() { dnEl("dayNotePop").classList.remove("show"); dnCur = null; }
@@ -1297,7 +1297,7 @@ document.addEventListener("click", function(e) {
   var pop = dnEl("dayNotePop");
   if (!pop) return;
   if (pop.contains(e.target)) return;             // 팝업 내부 조작은 통과
-  var cell = e.target.closest && e.target.closest(".gantt_scale_cell");
+  var cell = e.target.closest && e.target.closest(".gantt_scale_cell, .gantt_task_cell");
   if (!cell) { dnClose(); return; }               // 바깥 클릭 = 닫기
   if (currentScale !== "day") return;             // 주간·월간 눈금은 하루로 특정되지 않음
   var d = gantt.dateFromPos(cell.offsetLeft + 2);
@@ -2304,7 +2304,17 @@ function buildBriefing() {
   var events = [], deadlines = [], ongoing = [], starting = [], doneLast = [];
 
   gantt.eachTask(function(t) {
-    if (t.is_section || t.is_past_group || !t.start_date) return;
+    if (t.is_section || t.is_past_group) return;
+    if (t.is_recur) {  // 반복 일정: 규칙 행은 늘 '진행 중'처럼 보이므로 이번 주 회차만 일정에 올린다
+      (t.occurrences || []).forEach(function(iso) {
+        var d = isoToDate(iso);
+        if (d && d >= thisW[0] && d <= thisW[1]) {
+          events.push({ d: d, txt: fmtMD(d) + (t.custom_time ? " " + t.custom_time : "") + " — " + t.text });
+        }
+      });
+      return;
+    }
+    if (!t.start_date) return;
     if (t.type === "project" || gantt.hasChild(t.id)) return;  // 잎 항목만
     var s = new Date(t.start_date); s.setHours(0, 0, 0, 0);
     var last = t.end_date ? new Date(t.end_date.valueOf() - (t.type === "milestone" ? 0 : 86400000)) : new Date(s);
