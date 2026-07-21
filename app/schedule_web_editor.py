@@ -354,19 +354,26 @@ def save_from_flat(flat, data):
 
 
 def apply_day_notes(data, day_notes):
-    """앱이 보낸 {날짜: 메모} 맵을 day_notes 배열로 반영.
+    """앱이 보낸 {키: 메모} 맵을 day_notes 배열로 반영.
+    키는 "날짜"(날짜 전체 메모) 또는 "날짜|항목ID"(특정 항목의 그 날짜 메모).
     None이면 구형 페이로드이므로 기존 메모를 그대로 둔다."""
     if day_notes is None:
         return
     if not isinstance(day_notes, dict):
         raise ValueError("day_notes 형식 오류 (객체가 아님)")
     out = []
-    for date, text in day_notes.items():
-        date = str(date).strip()
+    for key, text in day_notes.items():
+        parts = str(key).strip().split("|", 1)
+        date = parts[0].strip()
+        item = parts[1].strip() if len(parts) > 1 else ""
         text = str(text or "").strip()
-        if date and text:                       # 빈 메모는 삭제로 취급
-            out.append({"date": date, "text": text})
-    out.sort(key=lambda n: n["date"])
+        if not (date and text):                 # 빈 메모는 삭제로 취급
+            continue
+        entry = {"date": date, "text": text}
+        if item:
+            entry["item_id"] = int(item) if item.isdigit() else item
+        out.append(entry)
+    out.sort(key=lambda n: (n["date"], str(n.get("item_id", ""))))
     if out:
         data["day_notes"] = out
     else:
@@ -528,25 +535,26 @@ APP_HTML = r'''<!DOCTYPE html>
   }
   .day-note-mark:hover { opacity: 1; transform: scale(1.3); }
   .gantt_scale_cell { cursor: pointer; }
-  /* 메모가 있는 날짜: 격자 열 전체에 메모지빛 틴트가 남는다 */
+  /* 항목 메모: 그 항목 행의 그 날짜 칸 하나에만 메모지가 남는다 */
   body.scale-day .gantt_task_cell { position: relative; }
-  body.scale-day .gantt_task_cell.day-note-col::after {
-    content: ""; position: absolute; inset: 0;
-    background: rgba(251, 191, 36, 0.24); pointer-events: none;
-    box-shadow: inset 1px 0 0 rgba(217, 119, 6, 0.45), inset -1px 0 0 rgba(217, 119, 6, 0.45);
+  body.scale-day .gantt_task_cell.day-note-cell { cursor: pointer; }
+  body.scale-day .gantt_task_cell.day-note-cell::after {
+    content: "📝"; position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; background: rgba(251, 191, 36, 0.30);
+    box-shadow: inset 0 0 0 1px rgba(217, 119, 6, 0.5);
+    pointer-events: none; z-index: 5;  /* 막대 위에서도 보이도록 */
   }
-  /* 빈 격자 칸: 평소엔 비어 있다가 마우스를 올리면 + (메모 있는 칸은 📝) */
+  /* 빈 격자 칸: 평소엔 비어 있다가 마우스를 올리면 + (이미 메모가 있는 칸은 제외) */
   body.scale-day .gantt_task_cell:hover::before {
     content: "+"; position: absolute; top: 50%; left: 50%;
     transform: translate(-50%, -50%);
     width: 16px; height: 16px; line-height: 15px; text-align: center;
     font-size: 13px; font-weight: 700; color: #fff;
     background: rgba(79, 70, 229, 0.75); border-radius: 50%;
-    pointer-events: none; z-index: 1;
+    pointer-events: none; z-index: 6;
   }
-  body.scale-day .gantt_task_cell.day-note-col:hover::before {
-    content: "📝"; background: none; font-size: 12px;
-  }
+  body.scale-day .gantt_task_cell.day-note-cell:hover::before { content: none; }
   .day-note-pop {
     position: fixed; z-index: 40; width: 264px; display: none;
     background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
@@ -1222,7 +1230,7 @@ gantt.templates.timeline_cell_class = function(item, date) {
   if (date.getFullYear() === t.getFullYear() && date.getMonth() === t.getMonth() && date.getDate() === t.getDate()) {
     cls += " today";
   }
-  if (currentScale === "day" && DAY_NOTES[isoOf(date)]) cls += " day-note-col";
+  if (currentScale === "day" && DAY_NOTES[dnKey(isoOf(date), item.id)]) cls += " day-note-cell";
   return cls;
 };
 
@@ -1280,8 +1288,9 @@ function renderRecurDots() {
   });
 }
 
-// ── 날짜 메모: 눈금·타임라인 빈칸 클릭으로 보기/추가 ──
-var dnCur = null;  // 팝업이 열려 있는 날짜 (없으면 null)
+// ── 날짜 메모: 눈금 클릭 = 날짜 전체 메모, 격자 빈칸 클릭 = 그 항목의 그 날짜 메모 ──
+var dnCur = null;  // 열려 있는 메모 키: "날짜" 또는 "날짜|항목ID" (없으면 null)
+function dnKey(iso, itemId) { return itemId ? iso + "|" + itemId : iso; }
 function dnEl(id) { return document.getElementById(id); }
 function dnClose() { dnEl("dayNotePop").classList.remove("show"); dnCur = null; }
 function dnRender(edit) {
@@ -1293,16 +1302,18 @@ function dnRender(edit) {
   else dnEl("dnView").textContent = DAY_NOTES[dnCur] || "";
 }
 function dnStartEdit() { dnRender(true); }
-function dnOpen(iso, anchor) {
-  dnCur = iso;
+function dnOpen(iso, anchor, itemId) {
+  dnCur = dnKey(iso, itemId);
   var d = isoToDate(iso);
-  dnEl("dnDate").textContent = iso + (d ? " (" + gantt.locale.date.day_short[d.getDay()] + ")" : "");
+  var label = iso + (d ? " (" + gantt.locale.date.day_short[d.getDay()] + ")" : "");
+  if (itemId && gantt.isTaskExists(itemId)) label = gantt.getTask(itemId).text + " · " + label;
+  dnEl("dnDate").textContent = label;
   var pop = dnEl("dayNotePop");
   pop.classList.add("show");
   var r = anchor.getBoundingClientRect();  // 화면 밖으로 나가지 않게 보정
   pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 12)) + "px";
   pop.style.top  = Math.min(r.bottom + 6, window.innerHeight - pop.offsetHeight - 12) + "px";
-  dnRender(!DAY_NOTES[iso]);  // 메모가 없는 날짜면 바로 입력 상태로
+  dnRender(!DAY_NOTES[dnCur]);  // 메모가 없는 칸이면 바로 입력 상태로
 }
 function dnSave() {
   var v = dnEl("dnEdit").value.trim();
@@ -1326,7 +1337,16 @@ document.addEventListener("click", function(e) {
   if (!cell) { dnClose(); return; }               // 바깥 클릭 = 닫기
   if (currentScale !== "day") return;             // 주간·월간 눈금은 하루로 특정되지 않음
   var d = gantt.dateFromPos(cell.offsetLeft + 2);
-  if (d) dnOpen(isoOf(d), cell);
+  if (!d) return;
+  // 격자 칸이면 어느 항목의 행인지 찾는다 (섹션·지난 일정 행은 날짜 전체 메모로 취급)
+  var itemId = null;
+  var row = cell.closest(".gantt_task_row");
+  var tid = row && row.getAttribute("task_id");
+  if (tid && gantt.isTaskExists(tid)) {
+    var t = gantt.getTask(tid);
+    if (!t.is_section && !t.is_past_group) itemId = tid;
+  }
+  dnOpen(isoOf(d), cell, itemId);
 }, false);
 
 // 회차 다이아몬드 더블클릭 = 반복 일정 편집 (한 번만 등록)

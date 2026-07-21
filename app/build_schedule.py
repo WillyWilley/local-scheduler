@@ -100,15 +100,19 @@ def load_holidays():
 
 
 def day_note_map(data):
-    """day_notes 배열 → {날짜: 메모} 맵. 빈 메모는 버린다 (날짜당 하나)."""
+    """day_notes 배열 → {키: 메모} 맵. 빈 메모는 버린다.
+    키는 "날짜"(날짜 전체 메모) 또는 "날짜|항목ID"(특정 항목의 그 날짜 메모)."""
     out = {}
     for note in data.get("day_notes") or []:
         if not isinstance(note, dict):
             continue
         date = str(note.get("date") or "").strip()
         text = str(note.get("text") or "").strip()
-        if date and text:
-            out[date] = text
+        item = note.get("item_id")
+        if not (date and text):
+            continue
+        key = date if item in (None, "") else "%s|%s" % (date, item)
+        out[key] = text
     return out
 
 
@@ -722,13 +726,15 @@ HTML_TEMPLATE = r'''<!DOCTYPE html>
     transition: transform 0.12s;
   }
   .day-note-mark:hover { opacity: 1; transform: scale(1.3); }
-  /* 메모가 있는 날짜: 격자 열 전체에 메모지빛 틴트가 남는다 (클릭하면 내용 보기) */
+  /* 항목 메모: 그 항목 행의 그 날짜 칸 하나에만 메모지가 남는다 (클릭하면 내용 보기) */
   body.scale-day .gantt_task_cell { position: relative; }
-  body.scale-day .gantt_task_cell.day-note-col { cursor: pointer; }
-  body.scale-day .gantt_task_cell.day-note-col::after {
-    content: ""; position: absolute; inset: 0;
-    background: rgba(251, 191, 36, 0.24); pointer-events: none;
-    box-shadow: inset 1px 0 0 rgba(217, 119, 6, 0.45), inset -1px 0 0 rgba(217, 119, 6, 0.45);
+  body.scale-day .gantt_task_cell.day-note-cell { cursor: pointer; }
+  body.scale-day .gantt_task_cell.day-note-cell::after {
+    content: "📝"; position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; background: rgba(251, 191, 36, 0.30);
+    box-shadow: inset 0 0 0 1px rgba(217, 119, 6, 0.5);
+    pointer-events: none; z-index: 5;  /* 막대 위에서도 보이도록 */
   }
   .day-note-pop {
     position: fixed; z-index: 40; width: 264px; display: none;
@@ -1019,7 +1025,7 @@ function dayScaleFormat(date) {
   return date.getDate() + "(" + gantt.locale.date.day_short[date.getDay()] + ")" + noteMark(date);
 }
 
-// 표식·메모 날짜 칸 클릭 = 메모 내용 보기 (정적 뷰어는 편집 없음)
+// 표식·메모 칸 클릭 = 메모 내용 보기 (정적 뷰어는 편집 없음)
 document.addEventListener("click", function(e) {
   var pop = document.getElementById("dayNotePop");
   if (!pop || pop.contains(e.target)) return;
@@ -1027,10 +1033,21 @@ document.addEventListener("click", function(e) {
   if (!cell || currentScale !== "day") { pop.classList.remove("show"); return; }
   var d = gantt.dateFromPos(cell.offsetLeft + 2);
   var iso = d ? isoOf(d) : null;
-  if (!iso || !DAY_NOTES[iso]) { pop.classList.remove("show"); return; }
-  document.getElementById("dnDate").textContent =
-    iso + " (" + gantt.locale.date.day_short[d.getDay()] + ")";
-  document.getElementById("dnView").textContent = DAY_NOTES[iso];
+  if (!iso) { pop.classList.remove("show"); return; }
+  // 격자 칸이면 그 행 항목의 메모를 먼저 찾고, 없으면 날짜 전체 메모
+  var label = iso + " (" + gantt.locale.date.day_short[d.getDay()] + ")";
+  var key = null;
+  var row = cell.closest(".gantt_task_row");
+  var tid = row && row.getAttribute("task_id");
+  if (tid && DAY_NOTES[iso + "|" + tid]) {
+    key = iso + "|" + tid;
+    if (gantt.isTaskExists(tid)) label = gantt.getTask(tid).text + " · " + label;
+  } else if (DAY_NOTES[iso]) {
+    key = iso;
+  }
+  if (!key) { pop.classList.remove("show"); return; }
+  document.getElementById("dnDate").textContent = label;
+  document.getElementById("dnView").textContent = DAY_NOTES[key];
   pop.classList.add("show");
   var r = cell.getBoundingClientRect();
   pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 12)) + "px";
@@ -1056,7 +1073,7 @@ gantt.templates.timeline_cell_class = function(item, date) {
   if (date.getFullYear() === t.getFullYear() && date.getMonth() === t.getMonth() && date.getDate() === t.getDate()) {
     cls += " today";
   }
-  if (currentScale === "day" && DAY_NOTES[isoOf(date)]) cls += " day-note-col";
+  if (currentScale === "day" && DAY_NOTES[isoOf(date) + "|" + item.id]) cls += " day-note-cell";
   return cls;
 };
 
