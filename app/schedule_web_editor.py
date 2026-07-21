@@ -528,6 +528,25 @@ APP_HTML = r'''<!DOCTYPE html>
   }
   .day-note-mark:hover { opacity: 1; transform: scale(1.3); }
   .gantt_scale_cell { cursor: pointer; }
+  /* 메모가 있는 날짜: 격자 열 전체에 메모지빛 틴트가 남는다 */
+  body.scale-day .gantt_task_cell { position: relative; }
+  body.scale-day .gantt_task_cell.day-note-col::after {
+    content: ""; position: absolute; inset: 0;
+    background: rgba(251, 191, 36, 0.24); pointer-events: none;
+    box-shadow: inset 1px 0 0 rgba(217, 119, 6, 0.45), inset -1px 0 0 rgba(217, 119, 6, 0.45);
+  }
+  /* 빈 격자 칸: 평소엔 비어 있다가 마우스를 올리면 + (메모 있는 칸은 📝) */
+  body.scale-day .gantt_task_cell:hover::before {
+    content: "+"; position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 16px; height: 16px; line-height: 15px; text-align: center;
+    font-size: 13px; font-weight: 700; color: #fff;
+    background: rgba(79, 70, 229, 0.75); border-radius: 50%;
+    pointer-events: none; z-index: 1;
+  }
+  body.scale-day .gantt_task_cell.day-note-col:hover::before {
+    content: "📝"; background: none; font-size: 12px;
+  }
   .day-note-pop {
     position: fixed; z-index: 40; width: 264px; display: none;
     background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
@@ -1148,6 +1167,8 @@ function applyScaleCfg(level) {
   gantt.config.min_column_width = cfg.min_column_width;
   gantt.config.scales = cfg.scales;
   currentScale = level;
+  // 일간 눈금에서만 격자 칸 hover + 버튼·메모 열 표시가 살아나도록 표식
+  if (document.body) document.body.classList.toggle("scale-day", level === "day");
 }
 function setScale(level) {
   applyScaleCfg(level);
@@ -1168,9 +1189,12 @@ function isoOf(date) {
   return date.getFullYear() + "-" + ("0" + (date.getMonth() + 1)).slice(-2) +
          "-" + ("0" + date.getDate()).slice(-2);
 }
-// 메모가 있는 날짜에만 붙는 작은 메모지 표식 (내용은 클릭해야 보인다)
+// 메모가 있는 날짜에만 붙는 작은 메모지 표식 (마우스 올리면 미리보기, 내용은 클릭)
 function noteMark(date) {
-  return DAY_NOTES[isoOf(date)] ? "<span class='day-note-mark' title='메모 (클릭해서 보기)'>📝</span>" : "";
+  var t = DAY_NOTES[isoOf(date)];
+  if (!t) return "";
+  var preview = t.length > 80 ? t.slice(0, 80) + "…" : t;
+  return "<span class='day-note-mark' title='" + escHtml(preview).replace(/'/g, "&#39;") + "'>📝</span>";
 }
 
 function dayScaleFormat(date) {
@@ -1198,6 +1222,7 @@ gantt.templates.timeline_cell_class = function(item, date) {
   if (date.getFullYear() === t.getFullYear() && date.getMonth() === t.getMonth() && date.getDate() === t.getDate()) {
     cls += " today";
   }
+  if (currentScale === "day" && DAY_NOTES[isoOf(date)]) cls += " day-note-col";
   return cls;
 };
 

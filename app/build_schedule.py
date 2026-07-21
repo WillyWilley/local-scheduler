@@ -722,6 +722,14 @@ HTML_TEMPLATE = r'''<!DOCTYPE html>
     transition: transform 0.12s;
   }
   .day-note-mark:hover { opacity: 1; transform: scale(1.3); }
+  /* 메모가 있는 날짜: 격자 열 전체에 메모지빛 틴트가 남는다 (클릭하면 내용 보기) */
+  body.scale-day .gantt_task_cell { position: relative; }
+  body.scale-day .gantt_task_cell.day-note-col { cursor: pointer; }
+  body.scale-day .gantt_task_cell.day-note-col::after {
+    content: ""; position: absolute; inset: 0;
+    background: rgba(251, 191, 36, 0.24); pointer-events: none;
+    box-shadow: inset 1px 0 0 rgba(217, 119, 6, 0.45), inset -1px 0 0 rgba(217, 119, 6, 0.45);
+  }
   .day-note-pop {
     position: fixed; z-index: 40; width: 264px; display: none;
     background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
@@ -973,11 +981,14 @@ var scaleConfigs = {
   }
 };
 
+var currentScale = 'day';
 function setScale(level) {
   var cfg = scaleConfigs[level];
   gantt.config.scale_height = cfg.scale_height;
   gantt.config.min_column_width = cfg.min_column_width;
   gantt.config.scales = cfg.scales;
+  currentScale = level;
+  if (document.body) document.body.classList.toggle("scale-day", level === "day");
   gantt.render();
 }
 
@@ -996,7 +1007,10 @@ function isoOf(date) {
          "-" + ("0" + date.getDate()).slice(-2);
 }
 function noteMark(date) {
-  return DAY_NOTES[isoOf(date)] ? "<span class='day-note-mark' title='메모 (클릭해서 보기)'>📝</span>" : "";
+  var t = DAY_NOTES[isoOf(date)];
+  if (!t) return "";
+  var preview = t.length > 80 ? t.slice(0, 80) + "…" : t;
+  return "<span class='day-note-mark' title='" + escHtml(preview).replace(/'/g, "&#39;") + "'>📝</span>";
 }
 
 function dayScaleFormat(date) {
@@ -1005,22 +1019,20 @@ function dayScaleFormat(date) {
   return date.getDate() + "(" + gantt.locale.date.day_short[date.getDay()] + ")" + noteMark(date);
 }
 
-// 표식 클릭 = 메모 내용 보기 (정적 뷰어는 편집 없음)
+// 표식·메모 날짜 칸 클릭 = 메모 내용 보기 (정적 뷰어는 편집 없음)
 document.addEventListener("click", function(e) {
   var pop = document.getElementById("dayNotePop");
   if (!pop || pop.contains(e.target)) return;
-  var mark = e.target.closest && e.target.closest(".day-note-mark");
-  if (!mark) { pop.classList.remove("show"); return; }
-  var cell = mark.closest(".gantt_scale_cell");
-  var d = cell ? gantt.dateFromPos(cell.offsetLeft + 2) : null;
-  if (!d) return;
-  var iso = isoOf(d);
-  if (!DAY_NOTES[iso]) return;
+  var cell = e.target.closest && e.target.closest(".gantt_scale_cell, .gantt_task_cell");
+  if (!cell || currentScale !== "day") { pop.classList.remove("show"); return; }
+  var d = gantt.dateFromPos(cell.offsetLeft + 2);
+  var iso = d ? isoOf(d) : null;
+  if (!iso || !DAY_NOTES[iso]) { pop.classList.remove("show"); return; }
   document.getElementById("dnDate").textContent =
     iso + " (" + gantt.locale.date.day_short[d.getDay()] + ")";
   document.getElementById("dnView").textContent = DAY_NOTES[iso];
   pop.classList.add("show");
-  var r = mark.getBoundingClientRect();
+  var r = cell.getBoundingClientRect();
   pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 12)) + "px";
   pop.style.top  = Math.min(r.bottom + 6, window.innerHeight - pop.offsetHeight - 12) + "px";
 }, false);
@@ -1044,6 +1056,7 @@ gantt.templates.timeline_cell_class = function(item, date) {
   if (date.getFullYear() === t.getFullYear() && date.getMonth() === t.getMonth() && date.getDate() === t.getDate()) {
     cls += " today";
   }
+  if (currentScale === "day" && DAY_NOTES[isoOf(date)]) cls += " day-note-col";
   return cls;
 };
 
@@ -1208,6 +1221,8 @@ function setRange(months) {
   gantt.config.scale_height = cfg.scale_height;
   gantt.config.min_column_width = cfg.min_column_width;
   gantt.config.scales = cfg.scales;
+  currentScale = autoScale;
+  if (document.body) document.body.classList.toggle("scale-day", autoScale === "day");
   // 날짜 제한 해제 → 자유 스크롤
   gantt.config.start_date = null;
   gantt.config.end_date = null;
