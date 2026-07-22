@@ -1023,7 +1023,7 @@ APP_HTML = r'''<!DOCTYPE html>
       <button id="toggleDone" onclick="toggleDone()">완료 숨기기</button>
       <button id="darkBtn" onclick="toggleDark()" title="다크 모드">🌙</button>
     </div>
-    <button class="tool-btn" id="autostartBtn" onclick="toggleAutostart()">시작 시 자동 실행</button>
+    <button class="tool-btn" id="autostartBtn" onclick="toggleAutostart()">컴퓨터 시작 시 자동 실행</button>
     <button class="tool-btn" onclick="showBriefing()">주간 브리핑</button>
     <button class="tool-btn" onclick="discardAll()">되돌리기</button>
     <button id="saveBtn" onclick="saveAll()">저장</button>
@@ -2564,7 +2564,7 @@ function renderAutostart() {
   var b = document.getElementById("autostartBtn");
   if (!b) return;
   b.classList.toggle("on", autostartOn);
-  b.textContent = autostartOn ? "✅ 시작 시 자동 실행" : "시작 시 자동 실행";
+  b.textContent = autostartOn ? "✅ 컴퓨터 시작 시 자동 실행" : "컴퓨터 시작 시 자동 실행";
   b.title = autostartOn
     ? "컴퓨터를 켜면 자동으로 실행됩니다 (클릭하면 해제)"
     : "클릭하면 컴퓨터 시작 시 자동으로 실행되도록 등록합니다";
