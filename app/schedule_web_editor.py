@@ -24,8 +24,13 @@ import webbrowser
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))   # app/
-_BASE_DIR = os.path.dirname(_SCRIPT_DIR)                    # 프로젝트 루트
+if getattr(sys, "frozen", False):
+    # exe 배포본(PyInstaller): 모든 경로(assets/data/logs/output)가 exe 옆 기준
+    _SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.executable))
+    _BASE_DIR = _SCRIPT_DIR
+else:
+    _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))   # app/
+    _BASE_DIR = os.path.dirname(_SCRIPT_DIR)                    # 프로젝트 루트
 
 
 def _setup_logging():
@@ -52,7 +57,7 @@ _setup_logging()  # 이후의 import 오류까지 로그에 남도록 최대한 
 import build_schedule as bs
 import validate_schedule
 
-PORT = 8765
+PORT = int(os.environ.get("SCHEDULE_APP_PORT") or 8765)  # 배포 검증·다중 인스턴스용 오버라이드
 # 콘솔 자식 프로세스(netstat 등)가 pythonw 아래에서 검은 창을 띄우지 않도록
 NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 BACKUP_DIR = os.path.join(bs.BASE_DIR, "data", "backups")
@@ -414,7 +419,10 @@ AUTOSTART_NAME = "업무스케줄"
 
 
 def autostart_command():
-    """부팅 시 실행할 명령: 콘솔 없는 pythonw로 이 스크립트를 직접 실행 (bat과 동일 효과)"""
+    """부팅 시 실행할 명령: 콘솔 없는 pythonw로 이 스크립트를 직접 실행 (bat과 동일 효과).
+    exe 배포본은 exe 자신을 등록한다."""
+    if getattr(sys, "frozen", False):
+        return '"%s"' % sys.executable
     exe = sys.executable
     pyw = os.path.join(os.path.dirname(exe), "pythonw.exe")
     if not os.path.isfile(pyw):
@@ -2749,7 +2757,8 @@ class ExclusiveHTTPServer(ThreadingHTTPServer):
 SAVE_LOCK = threading.Lock()
 # 코드가 수정되면 상주 서버를 자동 교체하기 위한 버전 표식
 # (mtime이 아닌 내용 해시 — 동기화로 mtime만 바뀌어도 불필요한 재시작 없음)
-with open(os.path.abspath(__file__), "rb") as _f:
+_VERSION_SRC = sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__)
+with open(_VERSION_SRC, "rb") as _f:
     APP_VERSION = hashlib.md5(_f.read()).hexdigest()[:12]
 
 
@@ -3045,7 +3054,7 @@ def kill_python_on_port(port):
         if local.endswith(f":{port}") and pid.isdigit() and pid != my_pid:
             try:
                 info = (_run_text(["tasklist", "/FI", f"PID eq {pid}"]) or "").lower()
-                if "python" in info:
+                if "python" in info or "업무스케줄" in info:  # 스크립트판 또는 exe판 구서버
                     r = subprocess.run(["taskkill", "/PID", pid, "/F"],
                                        capture_output=True, timeout=10, creationflags=NOWIN)
                     if r.returncode == 0:
@@ -3109,7 +3118,8 @@ def main():
             print(f"공휴일 자동 갱신 실패 (캐시/내장 데이터로 동작): {e}")
 
     threading.Thread(target=_holiday_refresh, daemon=True).start()  # 공휴일 자동 갱신
-    threading.Timer(0.2, open_app_window, [url]).start()
+    if not os.environ.get("SCHEDULE_APP_HEADLESS"):  # 배포 검증용: 서버만 띄우기
+        threading.Timer(0.2, open_app_window, [url]).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -7,10 +7,16 @@ schedule_data.json → 업무_스케줄.html 생성
 """
 import json
 import os
+import sys
 from datetime import datetime, timedelta
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))   # app/
-BASE_DIR = os.path.dirname(SCRIPT_DIR)                     # 프로젝트 루트
+if getattr(sys, "frozen", False):
+    # exe 배포본(PyInstaller): data/output 경로가 exe 옆 기준
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.executable))
+    BASE_DIR = SCRIPT_DIR
+else:
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))   # app/
+    BASE_DIR = os.path.dirname(SCRIPT_DIR)                     # 프로젝트 루트
 DATA_FILE = os.path.join(BASE_DIR, "data", "schedule_data.json")
 SAMPLE_FILE = os.path.join(BASE_DIR, "data", "schedule_data.sample.json")
 OUTPUT_FILE = os.path.join(BASE_DIR, "output", "업무_스케줄.html")

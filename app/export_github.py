@@ -30,6 +30,7 @@ PUBLIC_FILES = [
     "ROADMAP.md",
     "업무스케줄.bat",
     "app/build_schedule.py",
+    "app/build_exe.py",
     "app/schedule_web_editor.py",
     "app/validate_schedule.py",
     "app/schedule_editor.py",
