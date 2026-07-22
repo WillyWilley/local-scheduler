@@ -649,6 +649,15 @@ APP_HTML = r'''<!DOCTYPE html>
   }
   .day-note-pop button.primary { background: #4f46e5; border-color: #4f46e5; color: #fff; }
   .day-note-pop button.danger { color: #dc2626; }
+  /* 막대 위 hover용 + 배지 (격자 칸의 CSS hover는 막대에 가려지므로 JS로 띄운다) */
+  .day-note-plus {
+    position: fixed; z-index: 38; width: 16px; height: 16px; line-height: 15px;
+    text-align: center; font-size: 13px; font-weight: 700; color: #fff;
+    background: rgba(79, 70, 229, 0.85); border-radius: 50%;
+    pointer-events: none; display: none;
+  }
+  .day-note-plus.show { display: block; }
+
   /* hover 미리보기 툴팁 (클릭 없이 내용 확인, 마우스를 가리지 않도록 통과) */
   .day-note-tip {
     position: fixed; z-index: 39; max-width: 300px; display: none;
@@ -1035,6 +1044,7 @@ APP_HTML = r'''<!DOCTYPE html>
   <div class="dn-tip-title" id="dnTipTitle"></div>
   <div class="dn-tip-text" id="dnTipText"></div>
 </div>
+<div class="day-note-plus" id="dayNotePlus">+</div>
 
 <div id="dlgOverlay">
   <div id="dlgCard">
@@ -1431,6 +1441,8 @@ function dnResolve(e) {
 function dnOpen(iso, anchor, itemId) {
   var tip = dnEl("dayNoteTip");
   if (tip) tip.classList.remove("show");
+  var plus = dnEl("dayNotePlus");
+  if (plus) plus.classList.remove("show");
   dnCur = dnKey(iso, itemId);
   var d = isoToDate(iso);
   var label = iso + (d ? " (" + gantt.locale.date.day_short[d.getDay()] + ")" : "");
@@ -1499,25 +1511,47 @@ gantt.attachEvent("onTaskClick", function(id, e) {
   return true;
 });
 
-// 메모가 있는 칸·막대 위에 마우스를 올리면 클릭 없이 내용 툴팁 표시
+// 메모가 있는 칸·막대 위에 마우스를 올리면 클릭 없이 내용 툴팁 표시,
+// 메모가 없는 막대 위에서는 + 배지를 그 날짜 칸 가운데에 띄운다
 // (막대 위에서는 같은 요소 안에서 날짜가 바뀌므로 mousemove로 추적)
 var dnTipKey = null;
 document.addEventListener("mousemove", function(e) {
-  var tip = dnEl("dayNoteTip");
+  var tip = dnEl("dayNoteTip"), plus = dnEl("dayNotePlus");
   if (!tip) return;
   var info = dnResolve(e);
+  var popOpen = dnEl("dayNotePop").classList.contains("show");
   var text = info && !info.section && DAY_NOTES[info.key];
-  if (!text || dnEl("dayNotePop").classList.contains("show")) {
+
+  // 메모 내용 툴팁
+  if (!text || popOpen) {
     if (dnTipKey !== null) { tip.classList.remove("show"); dnTipKey = null; }
-    return;
+  } else if (info.key !== dnTipKey) {             // 같은 메모 위에서 움직일 땐 유지
+    dnTipKey = info.key;
+    dnEl("dnTipTitle").textContent = info.label;
+    dnEl("dnTipText").textContent = text;
+    tip.classList.add("show");
+    tip.style.left = Math.max(8, Math.min(e.clientX + 14, window.innerWidth - tip.offsetWidth - 12)) + "px";
+    tip.style.top  = Math.min(e.clientY + 18, window.innerHeight - tip.offsetHeight - 12) + "px";
   }
-  if (info.key === dnTipKey) return;              // 같은 메모 위에서 움직이는 중
-  dnTipKey = info.key;
-  dnEl("dnTipTitle").textContent = info.label;
-  dnEl("dnTipText").textContent = text;
-  tip.classList.add("show");
-  tip.style.left = Math.max(8, Math.min(e.clientX + 14, window.innerWidth - tip.offsetWidth - 12)) + "px";
-  tip.style.top  = Math.min(e.clientY + 18, window.innerHeight - tip.offsetHeight - 12) + "px";
+
+  // + 배지: 막대에 가려진 칸은 CSS hover가 안 먹으므로 여기서 직접 표시
+  if (!plus) return;
+  var overBar = e.target.closest && e.target.closest(".gantt_task_line");
+  if (overBar && info && !info.section && !text && !popOpen) {
+    var area = document.querySelector(".gantt_bars_area");
+    var d0 = isoToDate(info.iso);
+    if (area && d0) {
+      var x0 = gantt.posFromDate(d0);
+      var d1 = new Date(d0); d1.setDate(d1.getDate() + 1);
+      var w = gantt.posFromDate(d1) - x0;
+      var br = overBar.getBoundingClientRect();
+      plus.style.left = (area.getBoundingClientRect().left + x0 + w / 2 - 8) + "px";
+      plus.style.top  = (br.top + br.height / 2 - 8) + "px";
+      plus.classList.add("show");
+    }
+  } else {
+    plus.classList.remove("show");
+  }
 }, false);
 
 // 회차 다이아몬드 더블클릭 = 반복 일정 편집 (한 번만 등록)
