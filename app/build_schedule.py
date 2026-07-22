@@ -1034,22 +1034,35 @@ function noteMark(date) {
   return DAY_NOTES[isoOf(date)] ? "<span class='day-note-mark'>📝</span>" : "";
 }
 
-// 클릭/hover된 칸이 가리키는 메모 키·라벨 계산 (눈금 칸 = 날짜 전체, 격자 칸 = 그 행 항목)
-function dnKeyFromCell(cell) {
-  var d = gantt.dateFromPos(cell.offsetLeft + 2);
-  if (!d) return null;
-  var iso = isoOf(d);
-  var label = iso + " (" + gantt.locale.date.day_short[d.getDay()] + ")";
-  var key = null;
-  var row = cell.closest(".gantt_task_row");
-  var tid = row && row.getAttribute("task_id");
+// 클릭/hover 지점이 가리키는 메모 찾기 (있을 때만 반환).
+// 눈금 칸 = 날짜 전체 메모, 격자 칸·막대 = 그 행 항목의 그 날짜 메모.
+function dnFound(iso, tid) {
+  var key = null, label = iso;
+  var d = isoToDate(iso);
+  if (d) label += " (" + gantt.locale.date.day_short[d.getDay()] + ")";
   if (tid && DAY_NOTES[iso + "|" + tid]) {
     key = iso + "|" + tid;
     if (gantt.isTaskExists(tid)) label = gantt.getTask(tid).text + " · " + label;
-  } else if (!row && DAY_NOTES[iso]) {
+  } else if (!tid && DAY_NOTES[iso]) {
     key = iso;
   }
   return key ? { key: key, label: label } : null;
+}
+function dnResolve(e) {
+  if (currentScale !== "day") return null;
+  var bar = e.target.closest && e.target.closest(".gantt_task_line");
+  if (bar) {  // 막대가 격자 칸을 가리므로 좌표로 날짜를 계산
+    var area = document.querySelector(".gantt_bars_area");
+    if (!area) return null;
+    var d = gantt.dateFromPos(e.clientX - area.getBoundingClientRect().left);
+    return d ? dnFound(isoOf(d), bar.getAttribute("task_id")) : null;
+  }
+  var cell = e.target.closest && e.target.closest(".gantt_scale_cell, .gantt_task_cell");
+  if (!cell) return null;
+  var d2 = gantt.dateFromPos(cell.offsetLeft + 2);
+  if (!d2) return null;
+  var row = cell.closest(".gantt_task_row");
+  return dnFound(isoOf(d2), row ? row.getAttribute("task_id") : null);
 }
 
 function dayScaleFormat(date) {
@@ -1058,41 +1071,52 @@ function dayScaleFormat(date) {
   return date.getDate() + "(" + gantt.locale.date.day_short[date.getDay()] + ")" + noteMark(date);
 }
 
-// 표식·메모 칸 클릭 = 메모 내용 보기 (정적 뷰어는 편집 없음)
-document.addEventListener("click", function(e) {
+// 표식·메모 칸·막대 클릭 = 메모 내용 보기 (정적 뷰어는 편집 없음)
+function dnShowPop(info, e) {
   var pop = document.getElementById("dayNotePop");
-  if (!pop || pop.contains(e.target)) return;
-  var cell = e.target.closest && e.target.closest(".gantt_scale_cell, .gantt_task_cell");
-  if (!cell || currentScale !== "day") { pop.classList.remove("show"); return; }
-  var info = dnKeyFromCell(cell);
-  if (!info) { pop.classList.remove("show"); return; }
   var tip = document.getElementById("dayNoteTip");
   if (tip) tip.classList.remove("show");
   document.getElementById("dnDate").textContent = info.label;
   document.getElementById("dnView").textContent = DAY_NOTES[info.key];
   pop.classList.add("show");
-  var r = cell.getBoundingClientRect();
-  pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 12)) + "px";
-  pop.style.top  = Math.min(r.bottom + 6, window.innerHeight - pop.offsetHeight - 12) + "px";
+  pop.style.left = Math.max(8, Math.min(e.clientX - 20, window.innerWidth - pop.offsetWidth - 12)) + "px";
+  pop.style.top  = Math.min(e.clientY + 8, window.innerHeight - pop.offsetHeight - 12) + "px";
+}
+document.addEventListener("click", function(e) {
+  var pop = document.getElementById("dayNotePop");
+  if (!pop || pop.contains(e.target)) return;
+  var info = dnResolve(e);
+  if (!info) { pop.classList.remove("show"); return; }
+  dnShowPop(info, e);
 }, false);
+// dhtmlx가 막대 클릭의 전파를 삼키는 경우 대비 — 공식 이벤트로도 같은 동작
+gantt.attachEvent("onTaskClick", function(id, e) {
+  if (e && e.target && e.target.closest && e.target.closest(".gantt_task_line")) {
+    var info = dnResolve(e);
+    if (info) dnShowPop(info, e);
+  }
+  return true;
+});
 
-// 메모가 있는 칸에 마우스를 올리면 클릭 없이 내용 툴팁 표시
-document.addEventListener("mouseover", function(e) {
+// 메모가 있는 칸·막대 위에 마우스를 올리면 클릭 없이 내용 툴팁 표시
+// (막대 위에서는 같은 요소 안에서 날짜가 바뀌므로 mousemove로 추적)
+var dnTipKey = null;
+document.addEventListener("mousemove", function(e) {
   var tip = document.getElementById("dayNoteTip");
   if (!tip) return;
   var pop = document.getElementById("dayNotePop");
-  var cell = e.target.closest && e.target.closest(".gantt_task_cell.day-note-cell, .gantt_scale_cell");
-  var info = (cell && currentScale === "day") ? dnKeyFromCell(cell) : null;
+  var info = dnResolve(e);
   if (!info || (pop && pop.classList.contains("show"))) {
-    tip.classList.remove("show");
+    if (dnTipKey !== null) { tip.classList.remove("show"); dnTipKey = null; }
     return;
   }
+  if (info.key === dnTipKey) return;
+  dnTipKey = info.key;
   document.getElementById("dnTipTitle").textContent = info.label;
   document.getElementById("dnTipText").textContent = DAY_NOTES[info.key];
   tip.classList.add("show");
-  var r = cell.getBoundingClientRect();
-  tip.style.left = Math.max(8, Math.min(r.left, window.innerWidth - tip.offsetWidth - 12)) + "px";
-  tip.style.top  = Math.min(r.bottom + 4, window.innerHeight - tip.offsetHeight - 12) + "px";
+  tip.style.left = Math.max(8, Math.min(e.clientX + 14, window.innerWidth - tip.offsetWidth - 12)) + "px";
+  tip.style.top  = Math.min(e.clientY + 18, window.innerHeight - tip.offsetHeight - 12) + "px";
 }, false);
 gantt.templates.scale_cell_class = function(date) {
   if (isHoliday(date)) return "holiday";

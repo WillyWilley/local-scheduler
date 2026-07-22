@@ -1361,21 +1361,41 @@ function dnRender(edit) {
   else dnEl("dnView").textContent = DAY_NOTES[dnCur] || "";
 }
 function dnStartEdit() { dnRender(true); }
-// 클릭/hover된 칸이 가리키는 메모 키·라벨 계산 (눈금 칸 = 날짜 전체, 격자 칸 = 그 행 항목)
-function dnKeyFromCell(cell) {
-  var d = gantt.dateFromPos(cell.offsetLeft + 2);
-  if (!d) return null;
-  var iso = isoOf(d);
-  var itemId = null;
-  var row = cell.closest(".gantt_task_row");
-  var tid = row && row.getAttribute("task_id");
-  if (tid && gantt.isTaskExists(tid)) {
-    var t = gantt.getTask(tid);
-    if (!t.is_section && !t.is_past_group) itemId = tid;
+// 클릭/hover 지점이 가리키는 메모 대상 계산.
+// 눈금 칸 = 날짜 전체 메모, 격자 칸·막대 = 그 행 항목의 그 날짜 메모.
+// 섹션·지난 일정 행은 메모 대상이 아니다 (section: true로 표시).
+function dnInfo(iso, itemId, section) {
+  var d = isoToDate(iso);
+  var label = iso + (d ? " (" + gantt.locale.date.day_short[d.getDay()] + ")" : "");
+  if (itemId && gantt.isTaskExists(itemId)) label = gantt.getTask(itemId).text + " · " + label;
+  return { iso: iso, itemId: itemId, key: dnKey(iso, itemId), label: label, section: !!section };
+}
+function dnItemOf(tid) {  // 행 id → 메모를 붙일 수 있는 항목 id (섹션 등은 null)
+  if (!tid || !gantt.isTaskExists(tid)) return null;
+  var t = gantt.getTask(tid);
+  return (t.is_section || t.is_past_group) ? null : tid;
+}
+function dnResolve(e) {
+  if (currentScale !== "day") return null;
+  // 막대 위: 좌표로 날짜를 계산 (막대가 격자 칸을 가리므로 칸 요소로는 못 찾는다)
+  var bar = e.target.closest && e.target.closest(".gantt_task_line");
+  if (bar) {
+    var area = document.querySelector(".gantt_bars_area");
+    var tid = bar.getAttribute("task_id");
+    if (!area || !tid) return null;
+    var d = gantt.dateFromPos(e.clientX - area.getBoundingClientRect().left);
+    if (!d) return null;
+    var itemId = dnItemOf(tid);
+    return dnInfo(isoOf(d), itemId, !itemId);
   }
-  var label = iso + " (" + gantt.locale.date.day_short[d.getDay()] + ")";
-  if (itemId) label = gantt.getTask(itemId).text + " · " + label;
-  return { iso: iso, itemId: itemId, key: dnKey(iso, itemId), label: label };
+  var cell = e.target.closest && e.target.closest(".gantt_scale_cell, .gantt_task_cell");
+  if (!cell) return null;
+  var d2 = gantt.dateFromPos(cell.offsetLeft + 2);
+  if (!d2) return null;
+  var row = cell.closest(".gantt_task_row");
+  if (!row) return dnInfo(isoOf(d2), null, false);      // 눈금 칸 = 날짜 전체 메모
+  var itemId2 = dnItemOf(row.getAttribute("task_id"));
+  return dnInfo(isoOf(d2), itemId2, !itemId2);          // 격자 칸 = 항목 메모 (섹션이면 무시)
 }
 function dnOpen(iso, anchor, itemId) {
   var tip = dnEl("dayNoteTip");
@@ -1406,34 +1426,67 @@ function dnDelete() {
   gantt.render();
   dnClose();
 }
+// 드래그(막대 이동·기간 조절) 직후에 따라오는 click은 메모로 취급하지 않는다
+var dnDownAt = null;
+document.addEventListener("mousedown", function(e) { dnDownAt = [e.clientX, e.clientY]; }, true);
+// 막대 클릭은 잠깐 기다렸다 열어서 더블클릭(편집창)과 충돌하지 않게 한다
+var dnPendingTimer = null;
+function dnOpenDelayed(iso, e, itemId) {
+  var ax = e.clientX, ay = e.clientY;
+  var anchor = { getBoundingClientRect: function() { return { left: ax - 20, bottom: ay + 6 }; } };
+  clearTimeout(dnPendingTimer);
+  dnPendingTimer = setTimeout(function() { dnOpen(iso, anchor, itemId); }, 260);
+}
+document.addEventListener("dblclick", function() { clearTimeout(dnPendingTimer); }, true);
+
 document.addEventListener("click", function(e) {
   var pop = dnEl("dayNotePop");
   if (!pop) return;
   if (pop.contains(e.target)) return;             // 팝업 내부 조작은 통과
-  var cell = e.target.closest && e.target.closest(".gantt_scale_cell, .gantt_task_cell");
-  if (!cell) { dnClose(); return; }               // 바깥 클릭 = 닫기
+  var onTarget = e.target.closest &&
+    e.target.closest(".gantt_task_line, .gantt_scale_cell, .gantt_task_cell");
+  if (!onTarget) { dnClose(); return; }           // 바깥 클릭 = 닫기
   if (currentScale !== "day") return;             // 주간·월간 눈금은 하루로 특정되지 않음
-  var info = dnKeyFromCell(cell);
-  if (info) dnOpen(info.iso, cell, info.itemId);
+  if (dnDownAt && (Math.abs(e.clientX - dnDownAt[0]) > 4 ||
+                   Math.abs(e.clientY - dnDownAt[1]) > 4)) return;  // 드래그였음
+  var info = dnResolve(e);
+  if (!info || info.section) return;              // 섹션·지난 일정 행은 무시
+  if (onTarget.classList.contains("gantt_task_line")) dnOpenDelayed(info.iso, e, info.itemId);
+  else dnOpen(info.iso, onTarget, info.itemId);
 }, false);
 
-// 메모가 있는 칸에 마우스를 올리면 클릭 없이 내용 툴팁 표시
-document.addEventListener("mouseover", function(e) {
+// dhtmlx가 막대 클릭의 전파를 삼키는 경우(드래그 직후 등) 대비 — 공식 이벤트로도 같은 동작.
+// dnOpenDelayed가 타이머를 공유하므로 document 리스너와 겹쳐도 팝업은 한 번만 열린다.
+gantt.attachEvent("onTaskClick", function(id, e) {
+  if (e && e.target && e.target.closest && e.target.closest(".gantt_task_line") &&
+      currentScale === "day" &&
+      !(dnDownAt && (Math.abs(e.clientX - dnDownAt[0]) > 4 ||
+                     Math.abs(e.clientY - dnDownAt[1]) > 4))) {
+    var info = dnResolve(e);
+    if (info && !info.section) dnOpenDelayed(info.iso, e, info.itemId);
+  }
+  return true;
+});
+
+// 메모가 있는 칸·막대 위에 마우스를 올리면 클릭 없이 내용 툴팁 표시
+// (막대 위에서는 같은 요소 안에서 날짜가 바뀌므로 mousemove로 추적)
+var dnTipKey = null;
+document.addEventListener("mousemove", function(e) {
   var tip = dnEl("dayNoteTip");
   if (!tip) return;
-  var cell = e.target.closest && e.target.closest(".gantt_task_cell.day-note-cell, .gantt_scale_cell");
-  var info = (cell && currentScale === "day") ? dnKeyFromCell(cell) : null;
-  var text = info && DAY_NOTES[info.key];
+  var info = dnResolve(e);
+  var text = info && !info.section && DAY_NOTES[info.key];
   if (!text || dnEl("dayNotePop").classList.contains("show")) {
-    tip.classList.remove("show");
+    if (dnTipKey !== null) { tip.classList.remove("show"); dnTipKey = null; }
     return;
   }
+  if (info.key === dnTipKey) return;              // 같은 메모 위에서 움직이는 중
+  dnTipKey = info.key;
   dnEl("dnTipTitle").textContent = info.label;
   dnEl("dnTipText").textContent = text;
   tip.classList.add("show");
-  var r = cell.getBoundingClientRect();
-  tip.style.left = Math.max(8, Math.min(r.left, window.innerWidth - tip.offsetWidth - 12)) + "px";
-  tip.style.top  = Math.min(r.bottom + 4, window.innerHeight - tip.offsetHeight - 12) + "px";
+  tip.style.left = Math.max(8, Math.min(e.clientX + 14, window.innerWidth - tip.offsetWidth - 12)) + "px";
+  tip.style.top  = Math.min(e.clientY + 18, window.innerHeight - tip.offsetHeight - 12) + "px";
 }, false);
 
 // 회차 다이아몬드 더블클릭 = 반복 일정 편집 (한 번만 등록)
