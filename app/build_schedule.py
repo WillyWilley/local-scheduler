@@ -736,6 +736,19 @@ HTML_TEMPLATE = r'''<!DOCTYPE html>
     box-shadow: inset 0 0 0 1px rgba(217, 119, 6, 0.5);
     pointer-events: none; z-index: 5;  /* 막대 위에서도 보이도록 */
   }
+  /* hover 미리보기 툴팁 (클릭 없이 내용 확인, 마우스를 가리지 않도록 통과) */
+  .day-note-tip {
+    position: fixed; z-index: 39; max-width: 300px; display: none;
+    background: #fff; border: 1px solid #e5e7eb; border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.14); padding: 8px 10px;
+    pointer-events: none;
+  }
+  .day-note-tip.show { display: block; }
+  .day-note-tip .dn-tip-title { font-size: 11.5px; color: #4f46e5; font-weight: 700; margin-bottom: 4px; }
+  .day-note-tip .dn-tip-text {
+    font-size: 12.5px; color: #374151; white-space: pre-wrap;
+    word-break: break-word; max-height: 160px; overflow: hidden;
+  }
   .day-note-pop {
     position: fixed; z-index: 40; width: 264px; display: none;
     background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
@@ -837,6 +850,11 @@ HTML_TEMPLATE = r'''<!DOCTYPE html>
 <div class="day-note-pop" id="dayNotePop">
   <h4 id="dnDate"></h4>
   <div class="dn-text" id="dnView"></div>
+</div>
+
+<div class="day-note-tip" id="dayNoteTip">
+  <div class="dn-tip-title" id="dnTipTitle"></div>
+  <div class="dn-tip-text" id="dnTipText"></div>
 </div>
 
 <script>
@@ -1013,10 +1031,25 @@ function isoOf(date) {
          "-" + ("0" + date.getDate()).slice(-2);
 }
 function noteMark(date) {
-  var t = DAY_NOTES[isoOf(date)];
-  if (!t) return "";
-  var preview = t.length > 80 ? t.slice(0, 80) + "…" : t;
-  return "<span class='day-note-mark' title='" + escHtml(preview).replace(/'/g, "&#39;") + "'>📝</span>";
+  return DAY_NOTES[isoOf(date)] ? "<span class='day-note-mark'>📝</span>" : "";
+}
+
+// 클릭/hover된 칸이 가리키는 메모 키·라벨 계산 (눈금 칸 = 날짜 전체, 격자 칸 = 그 행 항목)
+function dnKeyFromCell(cell) {
+  var d = gantt.dateFromPos(cell.offsetLeft + 2);
+  if (!d) return null;
+  var iso = isoOf(d);
+  var label = iso + " (" + gantt.locale.date.day_short[d.getDay()] + ")";
+  var key = null;
+  var row = cell.closest(".gantt_task_row");
+  var tid = row && row.getAttribute("task_id");
+  if (tid && DAY_NOTES[iso + "|" + tid]) {
+    key = iso + "|" + tid;
+    if (gantt.isTaskExists(tid)) label = gantt.getTask(tid).text + " · " + label;
+  } else if (!row && DAY_NOTES[iso]) {
+    key = iso;
+  }
+  return key ? { key: key, label: label } : null;
 }
 
 function dayScaleFormat(date) {
@@ -1031,27 +1064,35 @@ document.addEventListener("click", function(e) {
   if (!pop || pop.contains(e.target)) return;
   var cell = e.target.closest && e.target.closest(".gantt_scale_cell, .gantt_task_cell");
   if (!cell || currentScale !== "day") { pop.classList.remove("show"); return; }
-  var d = gantt.dateFromPos(cell.offsetLeft + 2);
-  var iso = d ? isoOf(d) : null;
-  if (!iso) { pop.classList.remove("show"); return; }
-  // 격자 칸이면 그 행 항목의 메모를 먼저 찾고, 없으면 날짜 전체 메모
-  var label = iso + " (" + gantt.locale.date.day_short[d.getDay()] + ")";
-  var key = null;
-  var row = cell.closest(".gantt_task_row");
-  var tid = row && row.getAttribute("task_id");
-  if (tid && DAY_NOTES[iso + "|" + tid]) {
-    key = iso + "|" + tid;
-    if (gantt.isTaskExists(tid)) label = gantt.getTask(tid).text + " · " + label;
-  } else if (DAY_NOTES[iso]) {
-    key = iso;
-  }
-  if (!key) { pop.classList.remove("show"); return; }
-  document.getElementById("dnDate").textContent = label;
-  document.getElementById("dnView").textContent = DAY_NOTES[key];
+  var info = dnKeyFromCell(cell);
+  if (!info) { pop.classList.remove("show"); return; }
+  var tip = document.getElementById("dayNoteTip");
+  if (tip) tip.classList.remove("show");
+  document.getElementById("dnDate").textContent = info.label;
+  document.getElementById("dnView").textContent = DAY_NOTES[info.key];
   pop.classList.add("show");
   var r = cell.getBoundingClientRect();
   pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 12)) + "px";
   pop.style.top  = Math.min(r.bottom + 6, window.innerHeight - pop.offsetHeight - 12) + "px";
+}, false);
+
+// 메모가 있는 칸에 마우스를 올리면 클릭 없이 내용 툴팁 표시
+document.addEventListener("mouseover", function(e) {
+  var tip = document.getElementById("dayNoteTip");
+  if (!tip) return;
+  var pop = document.getElementById("dayNotePop");
+  var cell = e.target.closest && e.target.closest(".gantt_task_cell.day-note-cell, .gantt_scale_cell");
+  var info = (cell && currentScale === "day") ? dnKeyFromCell(cell) : null;
+  if (!info || (pop && pop.classList.contains("show"))) {
+    tip.classList.remove("show");
+    return;
+  }
+  document.getElementById("dnTipTitle").textContent = info.label;
+  document.getElementById("dnTipText").textContent = DAY_NOTES[info.key];
+  tip.classList.add("show");
+  var r = cell.getBoundingClientRect();
+  tip.style.left = Math.max(8, Math.min(r.left, window.innerWidth - tip.offsetWidth - 12)) + "px";
+  tip.style.top  = Math.min(r.bottom + 4, window.innerHeight - tip.offsetHeight - 12) + "px";
 }, false);
 gantt.templates.scale_cell_class = function(date) {
   if (isHoliday(date)) return "holiday";

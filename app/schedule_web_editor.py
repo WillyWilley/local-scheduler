@@ -380,6 +380,43 @@ def apply_day_notes(data, day_notes):
         data.pop("day_notes", None)             # 하나도 없으면 키 자체를 지운다
 
 
+AUTOSTART_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+AUTOSTART_NAME = "업무스케줄"
+
+
+def autostart_command():
+    """부팅 시 실행할 명령: 콘솔 없는 pythonw로 이 스크립트를 직접 실행 (bat과 동일 효과)"""
+    exe = sys.executable
+    pyw = os.path.join(os.path.dirname(exe), "pythonw.exe")
+    if not os.path.isfile(pyw):
+        pyw = exe
+    return '"%s" "%s"' % (pyw, os.path.abspath(__file__))
+
+
+def autostart_enabled():
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, AUTOSTART_RUN_KEY) as k:
+            winreg.QueryValueEx(k, AUTOSTART_NAME)
+        return True
+    except OSError:
+        return False
+
+
+def set_autostart(enable):
+    """HKCU Run 키에 등록/해제 — 관리자 권한 불필요, 현재 사용자에게만 적용"""
+    import winreg
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, AUTOSTART_RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
+        if enable:
+            winreg.SetValueEx(k, AUTOSTART_NAME, 0, winreg.REG_SZ, autostart_command())
+        else:
+            try:
+                winreg.DeleteValue(k, AUTOSTART_NAME)
+            except FileNotFoundError:
+                pass
+    return autostart_enabled()
+
+
 def merge_new_colors(data, new_colors):
     """앱에서 추가한 새 색상을 팔레트에 병합 (키·색상값 검증)"""
     colors = data.setdefault("colors", {})
@@ -527,6 +564,10 @@ APP_HTML = r'''<!DOCTYPE html>
   .wd-toggle.on { background: #4f46e5; border-color: #4f46e5; color: #fff; font-weight: 700; }
   .recur-preview { font-size: 12px; color: #9ca3af; margin-top: 8px; }
 
+  /* 시작 시 자동 실행 토글 (켜져 있으면 인디고로 표시) */
+  .tool-btn.on { background: #4f46e5; border-color: #4f46e5; color: #fff; }
+  body.dark .tool-btn.on { background: #4f46e5; border-color: #4f46e5; color: #fff; }
+
   /* 날짜 메모: 눈금에는 메모지 표식만, 내용은 클릭해야 보인다 */
   .day-note-mark {
     position: absolute; top: 1px; right: 2px;
@@ -578,6 +619,21 @@ APP_HTML = r'''<!DOCTYPE html>
   }
   .day-note-pop button.primary { background: #4f46e5; border-color: #4f46e5; color: #fff; }
   .day-note-pop button.danger { color: #dc2626; }
+  /* hover 미리보기 툴팁 (클릭 없이 내용 확인, 마우스를 가리지 않도록 통과) */
+  .day-note-tip {
+    position: fixed; z-index: 39; max-width: 300px; display: none;
+    background: #fff; border: 1px solid #e5e7eb; border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.14); padding: 8px 10px;
+    pointer-events: none;
+  }
+  .day-note-tip.show { display: block; }
+  .day-note-tip .dn-tip-title { font-size: 11.5px; color: #4f46e5; font-weight: 700; margin-bottom: 4px; }
+  .day-note-tip .dn-tip-text {
+    font-size: 12.5px; color: #374151; white-space: pre-wrap;
+    word-break: break-word; max-height: 160px; overflow: hidden;
+  }
+  body.dark .day-note-tip { background: #1e293b; border-color: #334155; }
+  body.dark .day-note-tip .dn-tip-text { color: #e2e8f0; }
   body.dark .day-note-pop { background: #1e293b; border-color: #334155; }
   body.dark .day-note-pop .dn-text { color: #e2e8f0; }
   body.dark .day-note-pop textarea,
@@ -920,6 +976,7 @@ APP_HTML = r'''<!DOCTYPE html>
       <button id="toggleDone" onclick="toggleDone()">완료 숨기기</button>
       <button id="darkBtn" onclick="toggleDark()" title="다크 모드">🌙</button>
     </div>
+    <button class="tool-btn" id="autostartBtn" onclick="toggleAutostart()">시작 시 자동 실행</button>
     <button class="tool-btn" onclick="showBriefing()">주간 브리핑</button>
     <button class="tool-btn" onclick="discardAll()">되돌리기</button>
     <button id="saveBtn" onclick="saveAll()">저장</button>
@@ -942,6 +999,11 @@ APP_HTML = r'''<!DOCTYPE html>
     <button onclick="dnClose()">취소</button>
     <button class="primary" onclick="dnSave()">저장</button>
   </div>
+</div>
+
+<div class="day-note-tip" id="dayNoteTip">
+  <div class="dn-tip-title" id="dnTipTitle"></div>
+  <div class="dn-tip-text" id="dnTipText"></div>
 </div>
 
 <div id="dlgOverlay">
@@ -1197,12 +1259,9 @@ function isoOf(date) {
   return date.getFullYear() + "-" + ("0" + (date.getMonth() + 1)).slice(-2) +
          "-" + ("0" + date.getDate()).slice(-2);
 }
-// 메모가 있는 날짜에만 붙는 작은 메모지 표식 (마우스 올리면 미리보기, 내용은 클릭)
+// 날짜 전체 메모가 있는 날짜에만 붙는 작은 메모지 표식 (hover 툴팁으로 미리보기)
 function noteMark(date) {
-  var t = DAY_NOTES[isoOf(date)];
-  if (!t) return "";
-  var preview = t.length > 80 ? t.slice(0, 80) + "…" : t;
-  return "<span class='day-note-mark' title='" + escHtml(preview).replace(/'/g, "&#39;") + "'>📝</span>";
+  return DAY_NOTES[isoOf(date)] ? "<span class='day-note-mark'>📝</span>" : "";
 }
 
 function dayScaleFormat(date) {
@@ -1302,7 +1361,25 @@ function dnRender(edit) {
   else dnEl("dnView").textContent = DAY_NOTES[dnCur] || "";
 }
 function dnStartEdit() { dnRender(true); }
+// 클릭/hover된 칸이 가리키는 메모 키·라벨 계산 (눈금 칸 = 날짜 전체, 격자 칸 = 그 행 항목)
+function dnKeyFromCell(cell) {
+  var d = gantt.dateFromPos(cell.offsetLeft + 2);
+  if (!d) return null;
+  var iso = isoOf(d);
+  var itemId = null;
+  var row = cell.closest(".gantt_task_row");
+  var tid = row && row.getAttribute("task_id");
+  if (tid && gantt.isTaskExists(tid)) {
+    var t = gantt.getTask(tid);
+    if (!t.is_section && !t.is_past_group) itemId = tid;
+  }
+  var label = iso + " (" + gantt.locale.date.day_short[d.getDay()] + ")";
+  if (itemId) label = gantt.getTask(itemId).text + " · " + label;
+  return { iso: iso, itemId: itemId, key: dnKey(iso, itemId), label: label };
+}
 function dnOpen(iso, anchor, itemId) {
+  var tip = dnEl("dayNoteTip");
+  if (tip) tip.classList.remove("show");
   dnCur = dnKey(iso, itemId);
   var d = isoToDate(iso);
   var label = iso + (d ? " (" + gantt.locale.date.day_short[d.getDay()] + ")" : "");
@@ -1336,17 +1413,27 @@ document.addEventListener("click", function(e) {
   var cell = e.target.closest && e.target.closest(".gantt_scale_cell, .gantt_task_cell");
   if (!cell) { dnClose(); return; }               // 바깥 클릭 = 닫기
   if (currentScale !== "day") return;             // 주간·월간 눈금은 하루로 특정되지 않음
-  var d = gantt.dateFromPos(cell.offsetLeft + 2);
-  if (!d) return;
-  // 격자 칸이면 어느 항목의 행인지 찾는다 (섹션·지난 일정 행은 날짜 전체 메모로 취급)
-  var itemId = null;
-  var row = cell.closest(".gantt_task_row");
-  var tid = row && row.getAttribute("task_id");
-  if (tid && gantt.isTaskExists(tid)) {
-    var t = gantt.getTask(tid);
-    if (!t.is_section && !t.is_past_group) itemId = tid;
+  var info = dnKeyFromCell(cell);
+  if (info) dnOpen(info.iso, cell, info.itemId);
+}, false);
+
+// 메모가 있는 칸에 마우스를 올리면 클릭 없이 내용 툴팁 표시
+document.addEventListener("mouseover", function(e) {
+  var tip = dnEl("dayNoteTip");
+  if (!tip) return;
+  var cell = e.target.closest && e.target.closest(".gantt_task_cell.day-note-cell, .gantt_scale_cell");
+  var info = (cell && currentScale === "day") ? dnKeyFromCell(cell) : null;
+  var text = info && DAY_NOTES[info.key];
+  if (!text || dnEl("dayNotePop").classList.contains("show")) {
+    tip.classList.remove("show");
+    return;
   }
-  dnOpen(isoOf(d), cell, itemId);
+  dnEl("dnTipTitle").textContent = info.label;
+  dnEl("dnTipText").textContent = text;
+  tip.classList.add("show");
+  var r = cell.getBoundingClientRect();
+  tip.style.left = Math.max(8, Math.min(r.left, window.innerWidth - tip.offsetWidth - 12)) + "px";
+  tip.style.top  = Math.min(r.bottom + 4, window.innerHeight - tip.offsetHeight - 12) + "px";
 }, false);
 
 // 회차 다이아몬드 더블클릭 = 반복 일정 편집 (한 번만 등록)
@@ -2331,6 +2418,34 @@ function toggleDark() {
 }
 applyDark();
 
+// ── 컴퓨터 시작 시 자동 실행 토글 (HKCU Run 등록은 서버가 담당) ──
+var autostartOn = {{AUTOSTART}};
+function renderAutostart() {
+  var b = document.getElementById("autostartBtn");
+  if (!b) return;
+  b.classList.toggle("on", autostartOn);
+  b.textContent = autostartOn ? "✅ 시작 시 자동 실행" : "시작 시 자동 실행";
+  b.title = autostartOn
+    ? "컴퓨터를 켜면 자동으로 실행됩니다 (클릭하면 해제)"
+    : "클릭하면 컴퓨터 시작 시 자동으로 실행되도록 등록합니다";
+}
+function toggleAutostart() {
+  fetch("/autostart", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enable: !autostartOn })
+  }).then(function(r) { return r.json(); }).then(function(res) {
+    if (res.ok) {
+      autostartOn = res.enabled;
+      renderAutostart();
+      showToast(autostartOn ? "컴퓨터 시작 시 자동으로 실행됩니다" : "자동 실행이 해제되었습니다");
+    } else {
+      showToast("자동 실행 설정 실패: " + (res.error || ""));
+    }
+  }).catch(function() { showToast("자동 실행 설정 실패 (서버 연결 안 됨)"); });
+}
+renderAutostart();
+
 // ── 주간 브리핑 ──
 var DAY_KO = ["일", "월", "화", "수", "목", "금", "토"];
 function weekRange(offset) {
@@ -2482,6 +2597,7 @@ def render_app():
                         json.dumps(bs.day_note_map(data), ensure_ascii=False).replace("</", "<\\/"))
     html = html.replace("{{DATA_TOKEN}}", data_token())
     html = html.replace("{{APP_VERSION}}", APP_VERSION)
+    html = html.replace("{{AUTOSTART}}", "true" if autostart_enabled() else "false")
     # 로컬 자산이 없으면(공개 저장소에서 갓 받은 경우 등) CDN으로 폴백
     if not all(os.path.isfile(os.path.join(bs.BASE_DIR, "assets", n)) for n in ASSETS):
         html = html.replace(f"/assets/dhtmlxgantt.js?v={APP_VERSION}",
@@ -2561,6 +2677,19 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
+        if self.path == "/autostart":  # 컴퓨터 시작 시 자동 실행 등록/해제
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                payload = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+                enabled = set_autostart(bool(payload.get("enable")))
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 자동 실행 "
+                      + ("등록" if enabled else "해제"))
+                self._send(json.dumps({"ok": True, "enabled": enabled}, ensure_ascii=False),
+                           "application/json; charset=utf-8")
+            except Exception as e:
+                self._send(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False),
+                           "application/json; charset=utf-8", 500)
+            return
         if self.path != "/save":
             self.send_error(404)
             return
