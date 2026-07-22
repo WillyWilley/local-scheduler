@@ -380,6 +380,35 @@ def apply_day_notes(data, day_notes):
         data.pop("day_notes", None)             # 하나도 없으면 키 자체를 지운다
 
 
+def prune_orphan_day_notes(data):
+    """삭제된 항목을 가리키는 메모 제거.
+    남겨두면 항목 id가 재사용될 때 엉뚱한 항목에 옛 메모가 붙는다."""
+    notes = data.get("day_notes")
+    if not notes:
+        return
+    ids = set()
+
+    def collect(node):
+        if isinstance(node, dict):
+            if "id" in node:
+                ids.add(node["id"])
+            for v in node.values():
+                collect(v)
+        elif isinstance(node, list):
+            for v in node:
+                collect(v)
+
+    collect(data.get("sections"))
+    kept = [n for n in notes
+            if not isinstance(n, dict)
+            or n.get("item_id") in (None, "")
+            or n.get("item_id") in ids]
+    if kept:
+        data["day_notes"] = kept
+    else:
+        data.pop("day_notes", None)
+
+
 AUTOSTART_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 AUTOSTART_NAME = "업무스케줄"
 
@@ -586,8 +615,10 @@ APP_HTML = r'''<!DOCTYPE html>
     box-shadow: inset 0 0 0 1px rgba(217, 119, 6, 0.5);
     pointer-events: none; z-index: 5;  /* 막대 위에서도 보이도록 */
   }
-  /* 빈 격자 칸: 평소엔 비어 있다가 마우스를 올리면 + (이미 메모가 있는 칸은 제외) */
-  body.scale-day .gantt_task_cell:hover::before {
+  /* 빈 격자 칸: 평소엔 비어 있다가 마우스를 올리면 +
+     (섹션·지난 일정 행과 이미 메모가 있는 칸은 제외) */
+  body.scale-day .gantt_task_row:not(.section-row):not(.section-row-event):not(.section-row-recur):not(.past-group-row)
+    .gantt_task_cell:not(.day-note-cell):hover::before {
     content: "+"; position: absolute; top: 50%; left: 50%;
     transform: translate(-50%, -50%);
     width: 16px; height: 16px; line-height: 15px; text-align: center;
@@ -595,7 +626,6 @@ APP_HTML = r'''<!DOCTYPE html>
     background: rgba(79, 70, 229, 0.75); border-radius: 50%;
     pointer-events: none; z-index: 6;
   }
-  body.scale-day .gantt_task_cell.day-note-cell:hover::before { content: none; }
   .day-note-pop {
     position: fixed; z-index: 40; width: 264px; display: none;
     background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
@@ -1315,6 +1345,7 @@ gantt.templates.task_row_class = function(start, end, task) {
   if (task.is_section === 'project') cls.push("section-row");
   else if (task.is_section === 'event') cls.push("section-row-event");
   else if (task.is_section === 'recurring') cls.push("section-row-recur");
+  if (task.is_past_group) cls.push("past-group-row");
   if (task.is_single_event) cls.push("single-event-row");
   if (task.custom_status === 'undetermined') cls.push("undetermined-row");
   return cls.join(" ");
@@ -1550,6 +1581,20 @@ try {
     if (task.notes) h += "<br><br><b>메모:</b><br>" + escHtml(task.notes).replace(/\n/g, "<br>");
     return h;
   };
+  // 작업 정보 툴팁은 막대가 아니라 왼쪽 목록(그리드)에서만 띄운다
+  // (막대 위 hover는 날짜 메모 툴팁 전용)
+  gantt.attachEvent("onGanttReady", function() {
+    gantt.ext.tooltips.detach("[" + gantt.config.task_attribute + "]:not(.gantt_task_row)");
+    gantt.ext.tooltips.tooltipFor({
+      selector: ".gantt_grid [" + gantt.config.task_attribute + "]",
+      html: function(event, node) {
+        var id = node.getAttribute(gantt.config.task_attribute);
+        if (!id || !gantt.isTaskExists(id)) return null;
+        var t = gantt.getTask(id);
+        return gantt.templates.tooltip_text(t.start_date, t.end_date, t) || null;
+      }
+    });
+  });
 } catch(e) {}
 
 // ── 커스텀 컨트롤: 시작~종료 캘린더 날짜 선택 ──
@@ -2774,6 +2819,7 @@ class Handler(BaseHTTPRequestHandler):
                 merge_new_colors(data, new_colors)
                 data = save_from_flat(flat, data)
                 apply_day_notes(data, day_notes)
+                prune_orphan_day_notes(data)
 
                 errors = validate_schedule.validate(data)
                 if errors:

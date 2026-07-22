@@ -1221,6 +1221,7 @@ gantt.templates.task_class = function(start, end, task) {
 try {
   gantt.templates.tooltip_date_format = gantt.date.date_to_str("%Y-%m-%d");
   gantt.templates.tooltip_text = function(start, end, task) {
+    if (task.is_section || task.is_past_group) return "";
     var h = "<b>" + escHtml(task.text) + "</b><br>";
     if (task.is_recur) {
       h += escHtml(task.recur_text || "반복");
@@ -1240,6 +1241,20 @@ try {
     if (task.notes) h += "<br><br><b>메모:</b><br>" + escHtml(task.notes).replace(/\n/g, "<br>");
     return h;
   };
+  // 작업 정보 툴팁은 막대가 아니라 왼쪽 목록(그리드)에서만 띄운다
+  // (막대 위 hover는 날짜 메모 툴팁 전용)
+  gantt.attachEvent("onGanttReady", function() {
+    gantt.ext.tooltips.detach("[" + gantt.config.task_attribute + "]:not(.gantt_task_row)");
+    gantt.ext.tooltips.tooltipFor({
+      selector: ".gantt_grid [" + gantt.config.task_attribute + "]",
+      html: function(event, node) {
+        var id = node.getAttribute(gantt.config.task_attribute);
+        if (!id || !gantt.isTaskExists(id)) return null;
+        var t = gantt.getTask(id);
+        return gantt.templates.tooltip_text(t.start_date, t.end_date, t) || null;
+      }
+    });
+  });
 } catch(e) {}
 
 // 초기화
