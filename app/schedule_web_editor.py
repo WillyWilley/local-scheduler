@@ -2911,6 +2911,22 @@ def _find_app_windows():
     return found
 
 
+def _close_app_windows():
+    """떠 있는 앱 창을 모두 닫는다 (서버 교체 뒤 남는 유령 창 정리용).
+    Edge 앱 창은 페이지 스크립트의 window.close()가 차단되는 경우가 많아
+    네이티브 WM_CLOSE로 닫는다."""
+    import ctypes
+    WM_CLOSE = 0x0010
+    wins = _find_app_windows()
+    for h in wins:
+        try:
+            ctypes.windll.user32.PostMessageW(h, WM_CLOSE, 0, 0)
+        except Exception:
+            pass
+    if wins:
+        print(f"이전 앱 창 {len(wins)}개를 정리했습니다.")
+
+
 def _is_maximized(hwnd):
     import ctypes
 
@@ -3082,8 +3098,12 @@ def main():
             state = probe_port(p)
             if state == "ours-live":
                 url = f"http://127.0.0.1:{p}/"
-                print(f"이미 실행 중인 앱을 발견했습니다 — 창만 엽니다: {url}")
-                open_app_window(url, wait=True)
+                if _find_app_windows():  # 이미 창이 있으면 또 열지 않고 앞으로 가져온다
+                    print("이미 실행 중인 앱 창을 앞으로 가져옵니다.")
+                    _maximize_app_window(timeout=3.0)
+                else:
+                    print(f"이미 실행 중인 앱을 발견했습니다 — 창만 엽니다: {url}")
+                    open_app_window(url, wait=True)
                 return
             if state == "ours-old":
                 kill_python_on_port(p)
@@ -3119,6 +3139,7 @@ def main():
 
     threading.Thread(target=_holiday_refresh, daemon=True).start()  # 공휴일 자동 갱신
     if not os.environ.get("SCHEDULE_APP_HEADLESS"):  # 배포 검증용: 서버만 띄우기
+        _close_app_windows()  # 이전 세대 창(서버가 죽어 스스로 못 닫힌 유령 창) 정리
         threading.Timer(0.2, open_app_window, [url]).start()
     try:
         server.serve_forever()
