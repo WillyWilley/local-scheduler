@@ -1686,7 +1686,18 @@ function drRender(node) {
   var s = sel.s, e = sel.e || sel.s;
   if (s && e) {
     var endEx = new Date(e); endEx.setDate(endEx.getDate() + 1);
-    lbl.textContent = "근무일 " + workDaysBetween(s, endEx) + "일";
+    // 일회성 일정(학회 등)은 주말 포함 달력일로 저장되므로 표시도 달력일로
+    var kind = null;
+    try {
+      var lbid = gantt.getState().lightbox;
+      if (lbid !== null && lbid !== undefined && gantt.isTaskExists(lbid)) kind = gantt.getTask(lbid).kind;
+    } catch (err) {}
+    if (kind === "event") {
+      var calDays = Math.round((endEx - s) / 86400000);
+      lbl.textContent = "달력일 " + calDays + "일 (주말 포함)";
+    } else {
+      lbl.textContent = "근무일 " + workDaysBetween(s, endEx) + "일";
+    }
   } else {
     lbl.textContent = sel.s ? "종료일을 선택하세요" : "";
   }
