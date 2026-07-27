@@ -1584,7 +1584,8 @@ gantt.templates.task_end_date = function(date) {
   return gantt.templates.task_date(new Date(date.valueOf() - 86400000));
 };
 gantt.templates.rightside_text = function(start, end, task) {
-  if (task.type === "milestone") {
+  // 일회성 일정은 하루짜리(다이아몬드)든 여러 날(기간 바)이든 옆에 이름 표시
+  if (task.type === "milestone" || task.is_single_event) {
     return escHtml(task.text) + (task.custom_time ? " · " + escHtml(task.custom_time) : "");
   }
   return "";

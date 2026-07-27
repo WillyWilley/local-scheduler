@@ -1205,7 +1205,8 @@ gantt.templates.task_text = function(start, end, task) { return ""; };
 
 // 바 오른쪽 텍스트: 마일스톤만 일정명 표시
 gantt.templates.rightside_text = function(start, end, task) {
-  if (task.type === "milestone") {
+  // 일회성 일정은 하루짜리(다이아몬드)든 여러 날(기간 바)이든 옆에 이름 표시
+  if (task.type === "milestone" || task.is_single_event) {
     return escHtml(task.text) + (task.custom_time ? " · " + escHtml(task.custom_time) : "");
   }
   return "";
