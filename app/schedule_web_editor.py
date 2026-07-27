@@ -667,6 +667,16 @@ APP_HTML = r'''<!DOCTYPE html>
     pointer-events: none; display: none;
   }
   .day-note-plus.show { display: block; }
+  /* 막대 hover 시 ✏️ 편집 배지 (+ 배지 왼쪽, 클릭 = 편집창) */
+  .bar-edit-btn {
+    position: fixed; z-index: 38; width: 18px; height: 18px; line-height: 17px;
+    text-align: center; font-size: 10px; background: #fff;
+    border: 1px solid #c7d2fe; border-radius: 50%;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18); cursor: pointer; display: none;
+  }
+  .bar-edit-btn:hover { transform: scale(1.15); }
+  .bar-edit-btn.show { display: block; }
+  body.dark .bar-edit-btn { background: #1e293b; border-color: #475569; }
 
   /* hover 미리보기 툴팁 (클릭 없이 내용 확인, 마우스를 가리지 않도록 통과) */
   .day-note-tip {
@@ -1056,6 +1066,7 @@ APP_HTML = r'''<!DOCTYPE html>
   <div class="dn-tip-text" id="dnTipText"></div>
 </div>
 <div class="day-note-plus" id="dayNotePlus">+</div>
+<div class="bar-edit-btn" id="barEditBtn" title="이 일정 편집 (더블클릭과 동일)">✏️</div>
 
 <div id="dlgOverlay">
   <div id="dlgCard">
@@ -1454,6 +1465,8 @@ function dnOpen(iso, anchor, itemId) {
   if (tip) tip.classList.remove("show");
   var plus = dnEl("dayNotePlus");
   if (plus) plus.classList.remove("show");
+  var editBtn = dnEl("barEditBtn");
+  if (editBtn) editBtn.classList.remove("show");
   dnCur = dnKey(iso, itemId);
   var d = isoToDate(iso);
   var label = iso + (d ? " (" + gantt.locale.date.day_short[d.getDay()] + ")" : "");
@@ -1545,10 +1558,13 @@ document.addEventListener("mousemove", function(e) {
     tip.style.top  = Math.min(e.clientY + 18, window.innerHeight - tip.offsetHeight - 12) + "px";
   }
 
-  // + 배지: 막대에 가려진 칸은 CSS hover가 안 먹으므로 여기서 직접 표시
+  // 막대 위 배지: [✏️ 편집] [+ 메모] — 막대에 가려진 칸은 CSS hover가 안 먹으므로 직접 표시
   if (!plus) return;
+  var edit = dnEl("barEditBtn");
+  if (edit && (e.target === edit || edit.contains(e.target))) return;  // 배지 위에서는 유지
   var overBar = e.target.closest && e.target.closest(".gantt_task_line");
-  if (overBar && info && !info.section && !text && !popOpen) {
+  var cx = null, cy = null;
+  if (overBar && info && !info.section && !popOpen) {
     var area = document.querySelector(".gantt_bars_area");
     var d0 = isoToDate(info.iso);
     if (area && d0) {
@@ -1556,14 +1572,44 @@ document.addEventListener("mousemove", function(e) {
       var d1 = new Date(d0); d1.setDate(d1.getDate() + 1);
       var w = gantt.posFromDate(d1) - x0;
       var br = overBar.getBoundingClientRect();
-      plus.style.left = (area.getBoundingClientRect().left + x0 + w / 2 - 8) + "px";
-      plus.style.top  = (br.top + br.height / 2 - 8) + "px";
-      plus.classList.add("show");
+      cx = area.getBoundingClientRect().left + x0 + w / 2;  // 커서가 놓인 날짜 칸의 중앙
+      cy = br.top + br.height / 2;
     }
+  }
+  if (cx !== null && !text) {  // 메모 없는 날짜에만 + (있으면 툴팁이 대신 뜬다)
+    plus.style.left = (cx - 8) + "px";
+    plus.style.top  = (cy - 8) + "px";
+    plus.classList.add("show");
   } else {
     plus.classList.remove("show");
   }
+  if (edit) {
+    if (cx !== null) {
+      edit.dataset.taskId = overBar.getAttribute("task_id");
+      edit.style.left = (cx - (text ? 9 : 31)) + "px";  // +가 없으면 그 자리로
+      edit.style.top  = (cy - 9) + "px";
+      edit.classList.add("show");
+    } else {
+      edit.classList.remove("show");
+    }
+  }
 }, false);
+
+// ✏️ 배지 클릭 = 그 일정의 편집창 열기 (더블클릭과 동일)
+(function() {
+  var edit = dnEl("barEditBtn");
+  if (!edit) return;
+  edit.addEventListener("click", function(ev) {
+    ev.stopPropagation();
+    var tid = edit.dataset.taskId;
+    edit.classList.remove("show");
+    var p = dnEl("dayNotePlus");
+    if (p) p.classList.remove("show");
+    dnClose();
+    clearTimeout(dnPendingTimer);  // 막대 클릭으로 예약된 메모 팝업 취소
+    if (tid && gantt.isTaskExists(tid)) gantt.showLightbox(tid);
+  });
+})();
 
 // 회차 다이아몬드 더블클릭 = 반복 일정 편집 (한 번만 등록)
 document.addEventListener("dblclick", function(e) {
