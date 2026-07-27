@@ -77,3 +77,8 @@ CLAUDE.md / ROADMAP.md      AI 하네스: 제품 헌장과 백로그
 - 간트차트 렌더링은 [dhtmlxGantt](https://dhtmlx.com/docs/products/dhtmlxGantt/)를 CDN으로 불러 사용합니다.
   dhtmlxGantt Standard는 GPLv2로 배포되므로, 이 앱을 **개인/사내 도구로 사용하는 것은 자유**지만
   dhtmlxGantt를 포함해 상용 제품으로 재배포하려면 별도 라이선스 확인이 필요합니다.
+
+## 만든 사람
+
+- **WillyMetalFuel** — 기획·설계·검수 · 문의: <cmlee@kaeri.re.kr>
+- AI 협업: [Claude Code](https://claude.com/claude-code) (Anthropic)

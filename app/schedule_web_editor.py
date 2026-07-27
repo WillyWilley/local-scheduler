@@ -513,6 +513,8 @@ APP_HTML = r'''<!DOCTYPE html>
   }
   .page-header h1 { font-size: 19px; font-weight: 700; color: #1a1a2e; margin: 0; white-space: nowrap; }
   .page-header .subtitle { font-size: 11.5px; color: #9ca3af; margin-top: 2px; white-space: nowrap; }
+  .page-header .made-by { color: inherit; text-decoration: none; }
+  .page-header .made-by:hover { text-decoration: underline; }
 
   .header-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; row-gap: 6px; }
   .btn-group {
@@ -1001,7 +1003,8 @@ APP_HTML = r'''<!DOCTYPE html>
 <div class="page-header">
   <div>
     <h1>업무 스케줄</h1>
-    <div class="subtitle">드래그·더블클릭으로 바로 편집 — 변경은 자동 저장됩니다 · 마지막 업데이트 {{LAST_UPDATED}}</div>
+    <div class="subtitle">드래그·더블클릭으로 바로 편집 — 변경은 자동 저장됩니다 · 마지막 업데이트 {{LAST_UPDATED}}
+      · 만든이 <a class="made-by" href="mailto:cmlee@kaeri.re.kr">cmlee@kaeri.re.kr</a></div>
   </div>
   <div class="header-controls">
     <input id="searchBox" class="search-box" type="search" placeholder="🔍 검색" oninput="onSearch(this.value)">

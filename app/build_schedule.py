@@ -832,7 +832,8 @@ HTML_TEMPLATE = r'''<!DOCTYPE html>
 <div class="page-header">
   <div>
     <h1>업무 스케줄</h1>
-    <div class="subtitle">마지막 업데이트: {{LAST_UPDATED}}</div>
+    <div class="subtitle">마지막 업데이트: {{LAST_UPDATED}}
+      · 만든이 <a class="made-by" href="mailto:cmlee@kaeri.re.kr" style="color:inherit;text-decoration:none">cmlee@kaeri.re.kr</a></div>
   </div>
   <div class="header-controls">
     <button data-scale="day" class="active">일간</button>
