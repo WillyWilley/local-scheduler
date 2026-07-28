@@ -60,6 +60,16 @@ def run_pyinstaller():
 
 def assemble():
     app_dir = os.path.join(DIST_DIR, APP_NAME)
+    # 배포 폴더에서 exe를 직접 실행해 본 흔적이 배포본에 섞이지 않도록 정리
+    # (data에는 sample만 남긴다 — 실데이터가 있으면 첫 실행 때 sample 복사를 건너뛴다)
+    for stray in (os.path.join("data", "schedule_data.json"),
+                  os.path.join("data", "holidays_cache.json")):
+        path = os.path.join(app_dir, stray)
+        if os.path.exists(path):
+            os.remove(path)
+            print("배포본에서 실행 흔적 제거:", stray)
+    for stray_dir in ("logs", "output", os.path.join("data", "backups")):
+        shutil.rmtree(os.path.join(app_dir, stray_dir), ignore_errors=True)
     # 자산·예시 데이터를 exe 옆에 배치 (frozen 모드는 exe 옆 경로를 쓴다)
     shutil.copytree(os.path.join(BASE_DIR, "assets"),
                     os.path.join(app_dir, "assets"), dirs_exist_ok=True)

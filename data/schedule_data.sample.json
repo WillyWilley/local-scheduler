@@ -170,7 +170,9 @@
           "title": "주간 팀 회의",
           "freq": "weekly",
           "interval": 1,
-          "weekdays": [1],
+          "weekdays": [
+            1
+          ],
           "start": "2026-07-06",
           "end": "2026-12-28",
           "time": "10:00~11:00",
@@ -186,6 +188,15 @@
           "time": "14:00~15:00",
           "color": "beta",
           "notes": "전월 실적 정리 후 보고"
+        },
+        {
+          "id": 123,
+          "title": "케리의날",
+          "freq": "monthly",
+          "nth": 3,
+          "weekday": 4,
+          "start": "2026-07-01",
+          "color": "alpha"
         }
       ]
     }
