@@ -2334,7 +2334,9 @@ gantt.attachEvent("onGanttRender", function() {
 var hideDone = localStorage.getItem('hideDone') === '1';
 function updateDoneBtn() {
   var b = document.getElementById('toggleDone');
-  if (b) b.classList.toggle('active', hideDone);
+  if (!b) return;
+  b.classList.toggle('active', hideDone);
+  b.textContent = hideDone ? '완료 펼치기' : '완료 숨기기';
 }
 function toggleDone() {
   hideDone = !hideDone;
