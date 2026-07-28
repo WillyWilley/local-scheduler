@@ -1291,8 +1291,8 @@ gantt.parse({
   links: []
 });
 
-// 완료 숨기기 토글: 하위까지 전부 완료된 최상위 프로젝트/지나간 일정만 숨김
-// (진행 중인 프로젝트 안의 완료된 업무는 맥락 유지를 위해 계속 흐리게 표시)
+// 완료 숨기기 토글: 완료된 항목은 종류를 가리지 않고 숨긴다
+// (진행 중 프로젝트 아래의 완료된 개별 업무 포함 — 사용자 피드백 반영)
 var hideDone = localStorage.getItem('hideDone') === '1';
 function updateDoneBtn() {
   var b = document.getElementById('toggleDone');
@@ -1308,12 +1308,7 @@ updateDoneBtn();
 gantt.attachEvent("onBeforeTaskDisplay", function(id, task) {
   if (!hideDone) return true;
   if (task.is_past_group) return false;
-  var t = task;
-  while (t) {
-    if ((t.is_parent_project || t.is_single_event) && getTaskStatus(t) === 'completed') return false;
-    var p = t.parent;
-    t = (p && p != gantt.config.root_id && gantt.isTaskExists(p)) ? gantt.getTask(p) : null;
-  }
+  if (!task.is_section && !task.is_recur && getTaskStatus(task) === 'completed') return false;
   return true;
 });
 

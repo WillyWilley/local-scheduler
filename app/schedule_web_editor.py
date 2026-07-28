@@ -2377,12 +2377,9 @@ gantt.attachEvent("onBeforeTaskDisplay", function(id, task) {
   if (searchQ) return taskMatchesSearch(task);
   if (!hideDone) return true;
   if (task.is_past_group) return false;
-  var t = task;
-  while (t) {
-    if ((t.is_parent_project || t.is_single_event) && getTaskStatus(t) === 'completed') return false;
-    var p = t.parent;
-    t = (p && p != gantt.config.root_id && gantt.isTaskExists(p)) ? gantt.getTask(p) : null;
-  }
+  // 완료된 항목은 종류를 가리지 않고 숨긴다 — 진행 중 프로젝트 아래의
+  // 완료된 개별 업무도 포함 (섹션·반복 규칙 행은 완료 개념이 없어 제외)
+  if (!task.is_section && !task.is_recur && getTaskStatus(task) === 'completed') return false;
   return true;
 });
 
