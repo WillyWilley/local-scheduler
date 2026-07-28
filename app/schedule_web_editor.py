@@ -2821,6 +2821,8 @@ SAVE_LOCK = threading.Lock()
 _VERSION_SRC = sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__)
 with open(_VERSION_SRC, "rb") as _f:
     APP_VERSION = hashlib.md5(_f.read()).hexdigest()[:12]
+# 배포 형태 표식: 같은 PC에서 exe 배포본이 개발용 스크립트판 서버를 교체하는 사고 방지용
+APP_MODE = "frozen" if getattr(sys, "frozen", False) else "script"
 
 
 def data_token():
@@ -2859,6 +2861,7 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/ping":
             self.send_response(204)
             self.send_header("X-App-Version", APP_VERSION)
+            self.send_header("X-App-Mode", APP_MODE)
             self.end_headers()
         elif self.path.startswith("/assets/"):
             name = os.path.basename(self.path.split("?")[0])
@@ -3087,30 +3090,33 @@ def listening_ports(candidates):
 
 
 def probe_port(port):
-    """포트 상태 판별: 'free' / 'ours-live'(같은 버전) / 'ours-old'(구버전 앱) / 'other'(무관 서버)"""
+    """포트 상태 판별 → (상태, 상대 모드).
+    상태: 'free' / 'ours-live'(같은 버전) / 'ours-old'(구버전 앱) / 'other'(무관 서버)
+    모드: 상대 서버의 X-App-Mode ('script'/'frozen', 모르면 '')"""
     import urllib.error
     import urllib.request
     try:
         r = urllib.request.urlopen(f"http://127.0.0.1:{port}/ping", timeout=1.5)
         if r.status == 204:
             ver = r.headers.get("X-App-Version")
+            mode = r.headers.get("X-App-Mode") or ""
             if ver == APP_VERSION:
-                return "ours-live"
+                return "ours-live", mode
             if ver:  # 우리 앱이지만 코드가 바뀜 → 교체 대상
-                return "ours-old"
-            return "other"  # 버전 표식 없는 204 → 무관 서버일 수 있으니 보호
+                return "ours-old", mode
+            return "other", ""  # 버전 표식 없는 204 → 무관 서버일 수 있으니 보호
     except urllib.error.HTTPError:
         pass  # 404 등 → 서버는 있으나 /ping 미지원 (구세대 또는 무관)
     except Exception:
-        return "free"  # 연결 거부/타임아웃
+        return "free", ""  # 연결 거부/타임아웃
     try:
         r = urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=1.5)
         body = r.read(30000).decode("utf-8", "ignore")
         if "업무 스케줄" in body or "스케줄 편집" in body:
-            return "ours-old"
+            return "ours-old", ""
     except Exception:
         pass
-    return "other"
+    return "other", ""
 
 
 def kill_python_on_port(port):
@@ -3156,7 +3162,11 @@ def main():
     candidates = list(range(PORT, PORT + 10))
     try:
         for p in sorted(listening_ports(candidates)):
-            state = probe_port(p)
+            state, other_mode = probe_port(p)
+            # exe 배포본이 개발용 스크립트판 서버를 만나면 교체하지 않고 창만 연다
+            # (개발 PC에서 공유용 exe를 실행해도 실데이터 서버가 죽지 않도록)
+            if state == "ours-old" and APP_MODE == "frozen" and other_mode == "script":
+                state = "ours-live"
             if state == "ours-live":
                 url = f"http://127.0.0.1:{p}/"
                 if _find_app_windows():  # 이미 창이 있으면 또 열지 않고 앞으로 가져온다
