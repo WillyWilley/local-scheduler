@@ -415,7 +415,8 @@ def prune_orphan_day_notes(data):
 
 
 AUTOSTART_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-AUTOSTART_NAME = "업무스케줄"
+# 개인용(스크립트판)과 공유용(exe)의 부팅 등록이 서로를 덮어쓰지 않도록 이름 분리
+AUTOSTART_NAME = "업무스케줄" if not getattr(sys, "frozen", False) else "업무스케줄_공유용"
 
 
 def autostart_command():
@@ -483,7 +484,7 @@ APP_HTML = r'''<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
-<title>업무 스케줄</title>
+<title>{{APP_TITLE}}</title>
 <script src="/assets/dhtmlxgantt.js?v={{APP_VERSION}}"></script>
 <link href="/assets/dhtmlxgantt.css?v={{APP_VERSION}}" rel="stylesheet">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap"
@@ -1012,7 +1013,7 @@ APP_HTML = r'''<!DOCTYPE html>
 
 <div class="page-header">
   <div>
-    <h1>업무 스케줄</h1>
+    <h1>{{APP_TITLE}}</h1>
     <div class="subtitle">드래그·더블클릭으로 바로 편집 — 변경은 자동 저장됩니다 · 마지막 업데이트 {{LAST_UPDATED}}
       · 만든이 <a class="made-by" href="mailto:cmlee@kaeri.re.kr">cmlee@kaeri.re.kr</a></div>
   </div>
@@ -2798,6 +2799,7 @@ def render_app():
                         json.dumps(bs.day_note_map(data), ensure_ascii=False).replace("</", "<\\/"))
     html = html.replace("{{DATA_TOKEN}}", data_token())
     html = html.replace("{{APP_VERSION}}", APP_VERSION)
+    html = html.replace("{{APP_TITLE}}", APP_TITLE)
     html = html.replace("{{AUTOSTART}}", "true" if autostart_enabled() else "false")
     # 로컬 자산이 없으면(공개 저장소에서 갓 받은 경우 등) CDN으로 폴백
     if not all(os.path.isfile(os.path.join(bs.BASE_DIR, "assets", n)) for n in ASSETS):
@@ -2821,8 +2823,30 @@ SAVE_LOCK = threading.Lock()
 _VERSION_SRC = sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__)
 with open(_VERSION_SRC, "rb") as _f:
     APP_VERSION = hashlib.md5(_f.read()).hexdigest()[:12]
-# 배포 형태 표식: 같은 PC에서 exe 배포본이 개발용 스크립트판 서버를 교체하는 사고 방지용
+# 배포 형태 표식: 같은 PC에서 개인용(스크립트판)과 공유용(exe)이 공존하기 위한 구분
 APP_MODE = "frozen" if getattr(sys, "frozen", False) else "script"
+# 창 제목 = 페이지 제목. 두 인스턴스의 창을 서로 혼동하지 않도록 배포 형태별로 다르게
+APP_TITLE = "업무 스케줄" if APP_MODE == "script" else "업무 스케줄 (공유용)"
+
+# 앱 창이 마지막으로 살아있음을 알린 시각 (열린 창은 4초마다 /ping을 보낸다)
+LAST_PING = [time.time()]
+
+
+def _idle_watchdog():
+    """exe 배포본 전용: 창이 닫혀 핑이 끊기면 서버도 완전히 종료한다.
+    (상주 서버가 로그·데이터 파일을 계속 잡고 있어 폴더 정리·교체가
+    막히는 문제 방지 — 개발용 스크립트판은 기존대로 상주)"""
+    while True:
+        time.sleep(15)
+        if time.time() - LAST_PING[0] > 60:
+            try:
+                if _find_app_windows():   # 창은 있는데 핑만 끊김(절전 복귀 등) → 유예
+                    LAST_PING[0] = time.time()
+                    continue
+            except Exception:
+                pass
+            print("앱 창이 닫혀 서버를 종료합니다 (exe 배포본은 백그라운드에 남지 않음).")
+            os._exit(0)
 
 
 def data_token():
@@ -2859,6 +2883,7 @@ class Handler(BaseHTTPRequestHandler):
                 traceback.print_exc()
                 self._send(f"앱 로드 실패: {e}", code=500)
         elif self.path == "/ping":
+            LAST_PING[0] = time.time()
             self.send_response(204)
             self.send_header("X-App-Version", APP_VERSION)
             self.send_header("X-App-Mode", APP_MODE)
@@ -2955,10 +2980,11 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def _find_app_windows():
-    """제목이 정확히 '업무 스케줄'인 보이는 창들 (Edge 앱 모드 창의 제목 = 페이지 제목)"""
+    """이 배포 형태의 앱 창들 (Edge 앱 모드 창의 제목 = 페이지 제목 = APP_TITLE).
+    개인용/공유용 창 제목이 달라 서로의 창은 건드리지 않는다."""
     import ctypes
     user32 = ctypes.windll.user32
-    target = "업무 스케줄"
+    target = APP_TITLE
     found = []
     proc_t = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
 
@@ -3163,10 +3189,10 @@ def main():
     try:
         for p in sorted(listening_ports(candidates)):
             state, other_mode = probe_port(p)
-            # exe 배포본이 개발용 스크립트판 서버를 만나면 교체하지 않고 창만 연다
-            # (개발 PC에서 공유용 exe를 실행해도 실데이터 서버가 죽지 않도록)
-            if state == "ours-old" and APP_MODE == "frozen" and other_mode == "script":
-                state = "ours-live"
+            # 다른 배포 형태의 서버(개인용↔공유용)는 건드리지 않고 공존한다
+            # → 그 포트를 피해 다음 포트에 자기 서버를 띄운다
+            if state in ("ours-live", "ours-old") and other_mode and other_mode != APP_MODE:
+                continue
             if state == "ours-live":
                 url = f"http://127.0.0.1:{p}/"
                 if _find_app_windows():  # 이미 창이 있으면 또 열지 않고 앞으로 가져온다
@@ -3209,6 +3235,8 @@ def main():
             print(f"공휴일 자동 갱신 실패 (캐시/내장 데이터로 동작): {e}")
 
     threading.Thread(target=_holiday_refresh, daemon=True).start()  # 공휴일 자동 갱신
+    if APP_MODE == "frozen":  # exe 배포본: 창이 닫히면 서버도 종료 (파일 잠금 방지)
+        threading.Thread(target=_idle_watchdog, daemon=True).start()
     if not os.environ.get("SCHEDULE_APP_HEADLESS"):  # 배포 검증용: 서버만 띄우기
         _close_app_windows()  # 이전 세대 창(서버가 죽어 스스로 못 닫힌 유령 창) 정리
         threading.Timer(0.2, open_app_window, [url]).start()
