@@ -2833,19 +2833,27 @@ LAST_PING = [time.time()]
 
 
 def _idle_watchdog():
-    """exe 배포본 전용: 창이 닫혀 핑이 끊기면 서버도 완전히 종료한다.
+    """exe 배포본 전용: 앱 창이 닫히면 서버도 곧바로 종료한다.
     (상주 서버가 로그·데이터 파일을 계속 잡고 있어 폴더 정리·교체가
-    막히는 문제 방지 — 개발용 스크립트판은 기존대로 상주)"""
+    막히는 문제 방지 — 개발용 스크립트판은 기존대로 상주)
+    1초 간격으로 창 존재를 확인해 닫힘과 거의 동시에 내려간다.
+    창을 못 찾는 환경(브라우저 탭 폴백 등)에서는 핑 끊김 15초를 기준으로 삼는다."""
+    window_seen = False
     while True:
-        time.sleep(15)
-        if time.time() - LAST_PING[0] > 60:
-            try:
-                if _find_app_windows():   # 창은 있는데 핑만 끊김(절전 복귀 등) → 유예
-                    LAST_PING[0] = time.time()
-                    continue
-            except Exception:
-                pass
-            print("앱 창이 닫혀 서버를 종료합니다 (exe 배포본은 백그라운드에 남지 않음).")
+        time.sleep(1)
+        wins = None
+        try:
+            wins = _find_app_windows()
+        except Exception:
+            pass  # 창 조회 실패 → 핑 기준으로만 판단
+        if wins:
+            window_seen = True
+            continue
+        if window_seen and wins == []:
+            print("앱 창이 닫혀 서버를 즉시 종료합니다 (exe 배포본은 백그라운드에 남지 않음).")
+            os._exit(0)
+        if time.time() - LAST_PING[0] > 15:
+            print("연결된 화면이 없어 서버를 종료합니다 (exe 배포본은 백그라운드에 남지 않음).")
             os._exit(0)
 
 
