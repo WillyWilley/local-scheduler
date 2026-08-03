@@ -1614,7 +1614,7 @@ document.addEventListener("mousemove", function(e) {
         editX = mr.right + 4;
         dnBadgeZone = { l: plusX - 6, r: editX + 24, t: editY - 6, b: editY + 24 };
       } else {
-        // 기간 막대: 커서가 놓인 날짜 칸 중앙에 [✏️][+]
+        // 기간 막대: 커서가 놓인 날짜 칸의 [+ 왼쪽 끝][✏️ 오른쪽 끝] (심볼과 동일한 배치)
         var area = document.querySelector(".gantt_bars_area");
         var d0 = isoToDate(info.iso);
         if (area && d0) {
@@ -1622,11 +1622,12 @@ document.addEventListener("mousemove", function(e) {
           var d1 = new Date(d0); d1.setDate(d1.getDate() + 1);
           var w = gantt.posFromDate(d1) - x0;
           var br = overBar.getBoundingClientRect();
-          var cx = area.getBoundingClientRect().left + x0 + w / 2;
+          var cellLeft = area.getBoundingClientRect().left + x0;
           editTid = tid;
           editY = plusY = br.top + br.height / 2 - 9;
-          plusX = cx - 8;
-          editX = cx - (text ? 9 : 31);  // +가 없으면 그 자리로
+          plusX = cellLeft + 3;
+          editX = cellLeft + w - 21;
+          dnBadgeZone = { l: plusX - 6, r: editX + 24, t: editY - 6, b: editY + 24 };
         }
       }
     }
