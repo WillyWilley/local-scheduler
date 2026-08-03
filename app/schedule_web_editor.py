@@ -628,7 +628,8 @@ APP_HTML = r'''<!DOCTYPE html>
   }
   /* 빈 격자 칸: 평소엔 비어 있다가 마우스를 올리면 +
      (섹션·지난 일정 행과 이미 메모가 있는 칸은 제외) */
-  body.scale-day .gantt_task_row:not(.section-row):not(.section-row-event):not(.section-row-recur):not(.past-group-row)
+  /* 일회성·반복 행은 심볼 옆 JS 배지를 쓰므로 칸 hover +를 끈다 (심볼과 겹침 방지) */
+  body.scale-day .gantt_task_row:not(.section-row):not(.section-row-event):not(.section-row-recur):not(.past-group-row):not(.single-event-row):not(.recur-row)
     .gantt_task_cell:not(.day-note-cell):hover::before {
     content: "+"; position: absolute; top: 50%; left: 50%;
     transform: translate(-50%, -50%);
@@ -1556,6 +1557,7 @@ gantt.attachEvent("onTaskClick", function(id, e) {
 // 메모가 없는 막대 위에서는 + 배지를 그 날짜 칸 가운데에 띄운다
 // (막대 위에서는 같은 요소 안에서 날짜가 바뀌므로 mousemove로 추적)
 var dnTipKey = null;
+var dnBadgeZone = null;  // 심볼 배지 유지 영역 (배지로 이동하는 동안 사라짐 방지)
 document.addEventListener("mousemove", function(e) {
   var tip = dnEl("dayNoteTip"), plus = dnEl("dayNotePlus");
   if (!tip) return;
@@ -1582,27 +1584,35 @@ document.addEventListener("mousemove", function(e) {
   var edit = dnEl("barEditBtn");
   if (edit && (e.target === edit || edit.contains(e.target))) return;   // 배지 위에서는 유지
   if (e.target === plus || plus.contains(e.target)) return;
+  // 심볼 배지로 마우스를 옮기는 동안(심볼~배지 구간) 배지가 사라지지 않도록 유지
+  if (dnBadgeZone) {
+    if (e.clientX >= dnBadgeZone.l && e.clientX <= dnBadgeZone.r &&
+        e.clientY >= dnBadgeZone.t && e.clientY <= dnBadgeZone.b) return;
+    dnBadgeZone = null;
+  }
   var overBar = e.target.closest && e.target.closest(".gantt_task_line");
   var overDot = e.target.closest && e.target.closest(".recur-dot");
   var editTid = null, editX = null, editY = null, plusX = null, plusY = null;
   if (info && !info.section && !popOpen) {
     if (overDot && overDot.dataset.taskId) {
-      // 반복 다이아몬드: 심볼 왼쪽에 [✏️][+]
+      // 반복 다이아몬드: [+] 심볼 왼쪽, [✏️] 심볼 오른쪽
       var dr = overDot.getBoundingClientRect();
       editTid = overDot.dataset.taskId;
       editY = plusY = dr.top + dr.height / 2 - 9;
-      plusX = dr.left - 24;
-      editX = dr.left - 46;
+      plusX = dr.left - 22;
+      editX = dr.right + 4;
+      dnBadgeZone = { l: plusX - 6, r: editX + 24, t: editY - 6, b: editY + 24 };
     } else if (overBar) {
       var tid = overBar.getAttribute("task_id");
       var isMilestone = gantt.isTaskExists(tid) && gantt.getTask(tid).type === "milestone";
       if (isMilestone) {
-        // 일회성 다이아몬드: 심볼 왼쪽에 [✏️][+] (오른쪽엔 일정 이름이 있다)
+        // 일회성 다이아몬드: [+] 심볼 왼쪽, [✏️] 심볼 오른쪽
         var mr = overBar.getBoundingClientRect();
         editTid = tid;
         editY = plusY = mr.top + mr.height / 2 - 9;
-        plusX = mr.left - 24;
-        editX = mr.left - 46;
+        plusX = mr.left - 22;
+        editX = mr.right + 4;
+        dnBadgeZone = { l: plusX - 6, r: editX + 24, t: editY - 6, b: editY + 24 };
       } else {
         // 기간 막대: 커서가 놓인 날짜 칸 중앙에 [✏️][+]
         var area = document.querySelector(".gantt_bars_area");
@@ -1654,6 +1664,7 @@ document.addEventListener("mousemove", function(e) {
     if (p) p.classList.remove("show");
     dnClose();
     clearTimeout(dnPendingTimer);  // 막대 클릭으로 예약된 메모 팝업 취소
+    dnBadgeZone = null;
     if (tid && gantt.isTaskExists(tid)) gantt.showLightbox(tid);
   });
 })();
@@ -1669,6 +1680,7 @@ document.addEventListener("mousemove", function(e) {
     var eb = dnEl("barEditBtn");
     if (eb) eb.classList.remove("show");
     clearTimeout(dnPendingTimer);
+    dnBadgeZone = null;
     if (iso) dnOpen(iso, plus, itemId);
   });
 })();
