@@ -660,13 +660,14 @@ APP_HTML = r'''<!DOCTYPE html>
   }
   .day-note-pop button.primary { background: #4f46e5; border-color: #4f46e5; color: #fff; }
   .day-note-pop button.danger { color: #dc2626; }
-  /* 막대 위 hover용 + 배지 (격자 칸의 CSS hover는 막대에 가려지므로 JS로 띄운다) */
+  /* 막대·심볼 위 hover용 + 배지 (클릭 = 그 날짜 메모 입력) */
   .day-note-plus {
     position: fixed; z-index: 38; width: 16px; height: 16px; line-height: 15px;
     text-align: center; font-size: 13px; font-weight: 700; color: #fff;
     background: rgba(79, 70, 229, 0.85); border-radius: 50%;
-    pointer-events: none; display: none;
+    cursor: pointer; display: none;
   }
+  .day-note-plus:hover { transform: scale(1.15); }
   .day-note-plus.show { display: block; }
   /* 막대 hover 시 ✏️ 편집 배지 (+ 배지 왼쪽, 클릭 = 편집창) */
   .bar-edit-btn {
@@ -1413,6 +1414,7 @@ function renderRecurDots() {
       dot.style.left = (x - 5.5) + "px";
       dot.style.top = top + "px";
       dot.dataset.taskId = task.id;
+      dot.dataset.iso = iso;
       dot.title = task.text + " · " + iso + (task.custom_time ? " " + task.custom_time : "");
       area.appendChild(dot);
     });
@@ -1449,6 +1451,12 @@ function dnItemOf(tid) {  // 행 id → 메모를 붙일 수 있는 항목 id (�
 }
 function dnResolve(e) {
   if (currentScale !== "day") return null;
+  // 반복 일정 다이아몬드: 회차 날짜가 심볼에 붙어 있다
+  var dot = e.target.closest && e.target.closest(".recur-dot");
+  if (dot && dot.dataset.iso) {
+    var dItem = dnItemOf(dot.dataset.taskId);
+    return dnInfo(dot.dataset.iso, dItem, !dItem);
+  }
   // 막대 위: 좌표로 날짜를 계산 (막대가 격자 칸을 가리므로 칸 요소로는 못 찾는다)
   var bar = e.target.closest && e.target.closest(".gantt_task_line");
   if (bar) {
@@ -1567,36 +1575,66 @@ document.addEventListener("mousemove", function(e) {
     tip.style.top  = Math.min(e.clientY + 18, window.innerHeight - tip.offsetHeight - 12) + "px";
   }
 
-  // 막대 위 배지: [✏️ 편집] [+ 메모] — 막대에 가려진 칸은 CSS hover가 안 먹으므로 직접 표시
+  // 막대·심볼 위 배지: [✏️ 편집] [+ 메모]
+  // 막대에 가려진 칸은 CSS hover가 안 먹으므로 직접 표시하고,
+  // 심볼(일회성 다이아몬드·반복 다이아몬드)은 가리지 않도록 왼쪽에 나란히 배치
   if (!plus) return;
   var edit = dnEl("barEditBtn");
-  if (edit && (e.target === edit || edit.contains(e.target))) return;  // 배지 위에서는 유지
+  if (edit && (e.target === edit || edit.contains(e.target))) return;   // 배지 위에서는 유지
+  if (e.target === plus || plus.contains(e.target)) return;
   var overBar = e.target.closest && e.target.closest(".gantt_task_line");
-  var cx = null, cy = null;
-  if (overBar && info && !info.section && !popOpen) {
-    var area = document.querySelector(".gantt_bars_area");
-    var d0 = isoToDate(info.iso);
-    if (area && d0) {
-      var x0 = gantt.posFromDate(d0);
-      var d1 = new Date(d0); d1.setDate(d1.getDate() + 1);
-      var w = gantt.posFromDate(d1) - x0;
-      var br = overBar.getBoundingClientRect();
-      cx = area.getBoundingClientRect().left + x0 + w / 2;  // 커서가 놓인 날짜 칸의 중앙
-      cy = br.top + br.height / 2;
+  var overDot = e.target.closest && e.target.closest(".recur-dot");
+  var editTid = null, editX = null, editY = null, plusX = null, plusY = null;
+  if (info && !info.section && !popOpen) {
+    if (overDot && overDot.dataset.taskId) {
+      // 반복 다이아몬드: 심볼 왼쪽에 [✏️][+]
+      var dr = overDot.getBoundingClientRect();
+      editTid = overDot.dataset.taskId;
+      editY = plusY = dr.top + dr.height / 2 - 9;
+      plusX = dr.left - 24;
+      editX = dr.left - 46;
+    } else if (overBar) {
+      var tid = overBar.getAttribute("task_id");
+      var isMilestone = gantt.isTaskExists(tid) && gantt.getTask(tid).type === "milestone";
+      if (isMilestone) {
+        // 일회성 다이아몬드: 심볼 왼쪽에 [✏️][+] (오른쪽엔 일정 이름이 있다)
+        var mr = overBar.getBoundingClientRect();
+        editTid = tid;
+        editY = plusY = mr.top + mr.height / 2 - 9;
+        plusX = mr.left - 24;
+        editX = mr.left - 46;
+      } else {
+        // 기간 막대: 커서가 놓인 날짜 칸 중앙에 [✏️][+]
+        var area = document.querySelector(".gantt_bars_area");
+        var d0 = isoToDate(info.iso);
+        if (area && d0) {
+          var x0 = gantt.posFromDate(d0);
+          var d1 = new Date(d0); d1.setDate(d1.getDate() + 1);
+          var w = gantt.posFromDate(d1) - x0;
+          var br = overBar.getBoundingClientRect();
+          var cx = area.getBoundingClientRect().left + x0 + w / 2;
+          editTid = tid;
+          editY = plusY = br.top + br.height / 2 - 9;
+          plusX = cx - 8;
+          editX = cx - (text ? 9 : 31);  // +가 없으면 그 자리로
+        }
+      }
     }
   }
-  if (cx !== null && !text) {  // 메모 없는 날짜에만 + (있으면 툴팁이 대신 뜬다)
-    plus.style.left = (cx - 8) + "px";
-    plus.style.top  = (cy - 8) + "px";
+  if (plusX !== null && !text) {  // 메모 없는 날짜에만 + (있으면 툴팁이 대신 뜬다)
+    plus.dataset.iso = info.iso;
+    plus.dataset.itemId = info.itemId || "";
+    plus.style.left = plusX + "px";
+    plus.style.top  = (plusY + 1) + "px";
     plus.classList.add("show");
   } else {
     plus.classList.remove("show");
   }
   if (edit) {
-    if (cx !== null) {
-      edit.dataset.taskId = overBar.getAttribute("task_id");
-      edit.style.left = (cx - (text ? 9 : 31)) + "px";  // +가 없으면 그 자리로
-      edit.style.top  = (cy - 9) + "px";
+    if (editTid !== null) {
+      edit.dataset.taskId = editTid;
+      edit.style.left = editX + "px";
+      edit.style.top  = editY + "px";
       edit.classList.add("show");
     } else {
       edit.classList.remove("show");
@@ -1617,6 +1655,21 @@ document.addEventListener("mousemove", function(e) {
     dnClose();
     clearTimeout(dnPendingTimer);  // 막대 클릭으로 예약된 메모 팝업 취소
     if (tid && gantt.isTaskExists(tid)) gantt.showLightbox(tid);
+  });
+})();
+// + 배지 클릭 = 그 항목·그 날짜 메모 입력 (막대·심볼 어디서든 동일)
+(function() {
+  var plus = dnEl("dayNotePlus");
+  if (!plus) return;
+  plus.addEventListener("click", function(ev) {
+    ev.stopPropagation();
+    var iso = plus.dataset.iso;
+    var itemId = plus.dataset.itemId || null;
+    plus.classList.remove("show");
+    var eb = dnEl("barEditBtn");
+    if (eb) eb.classList.remove("show");
+    clearTimeout(dnPendingTimer);
+    if (iso) dnOpen(iso, plus, itemId);
   });
 })();
 
