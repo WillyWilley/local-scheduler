@@ -809,6 +809,14 @@ APP_HTML = r'''<!DOCTYPE html>
   /* 시간 범위 드롭다운 */
   .timerange-block { display: flex; align-items: center; border: none !important; padding: 2px 0 !important; }
   .timerange-block select { width: 110px; }
+  .timerange-block input[type="time"] {
+    width: 110px; padding: 4px 8px; font: inherit;
+    border: 1px solid #d1d5db; border-radius: 6px; background: #fff;
+  }
+  .timerange-block input[type="time"]:focus { outline: none; border-color: #4f46e5; }
+  body.dark .timerange-block input[type="time"] {
+    background: #0f172a; color: #e2e8f0; border-color: #334155; color-scheme: dark;
+  }
   .timerange-block .tr-tilde { margin: 0 10px; color: #9ca3af; font-weight: 600; }
 
   /* 시작~종료 캘린더 범위 선택기 */
@@ -1842,40 +1850,25 @@ gantt.form_blocks["daterange"] = {
   focus: function(node) {}
 };
 
-// ── 커스텀 컨트롤: 시간 범위 드롭다운 (30분 단위) ──
+// ── 커스텀 컨트롤: 시간 범위 (직접 타이핑 + 피커, 분 단위 자유 입력) ──
 gantt.form_blocks["timerange"] = {
   render: function(sns) {
-    var opts = '<option value="">--:--</option>';
-    for (var h = 7; h <= 22; h++) {
-      for (var m = 0; m < 60; m += 30) {
-        var t = ("0" + h).slice(-2) + ":" + ("0" + m).slice(-2);
-        opts += '<option value="' + t + '">' + t + '</option>';
-      }
-    }
     return "<div class='gantt_cal_ltext timerange-block'>" +
-      "<select class='tr-start'>" + opts + "</select>" +
+      "<input type='time' class='tr-start'>" +
       "<span class='tr-tilde'>~</span>" +
-      "<select class='tr-end'>" + opts + "</select></div>";
+      "<input type='time' class='tr-end'></div>";
   },
   set_value: function(node, value, task) {
     var s = "", e = "";
     if (value) { var p = String(value).split("~"); s = (p[0] || "").trim(); e = (p[1] || "").trim(); }
-    ["tr-start", "tr-end"].forEach(function(cls, i) {
-      var sel = node.querySelector("." + cls);
-      var v = i === 0 ? s : e;
-      if (v && !sel.querySelector('option[value="' + v + '"]')) {
-        var o = document.createElement("option");
-        o.value = v; o.textContent = v;
-        sel.appendChild(o);  // 목록에 없는 기존 값 보존
-      }
-      sel.value = v;
-    });
+    node.querySelector(".tr-start").value = s;
+    node.querySelector(".tr-end").value = e;
   },
   get_value: function(node) {
     var s = node.querySelector(".tr-start").value;
     var e = node.querySelector(".tr-end").value;
     if (s && e) return s + "~" + e;
-    if (e) return "~" + e;  // 종료만 선택 시 시작으로 둔갑하지 않도록
+    if (e) return "~" + e;  // 종료만 입력 시 시작으로 둔갑하지 않도록
     return s || "";
   },
   focus: function(node) {}
