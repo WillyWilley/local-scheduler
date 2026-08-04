@@ -811,13 +811,14 @@ APP_HTML = r'''<!DOCTYPE html>
   /* 시간 범위 드롭다운 */
   .timerange-block { display: flex; align-items: center; border: none !important; padding: 2px 0 !important; }
   .timerange-block select { width: 110px; }
-  .timerange-block input[type="time"] {
-    width: 110px; padding: 4px 8px; font: inherit;
+  .timerange-block input {
+    width: 90px; padding: 4px 10px; font: inherit; text-align: center;
     border: 1px solid #d1d5db; border-radius: 6px; background: #fff;
   }
-  .timerange-block input[type="time"]:focus { outline: none; border-color: #4f46e5; }
-  body.dark .timerange-block input[type="time"] {
-    background: #0f172a; color: #e2e8f0; border-color: #334155; color-scheme: dark;
+  .timerange-block input:focus { outline: none; border-color: #4f46e5; }
+  .timerange-block input::placeholder { color: #c7cbd4; }
+  body.dark .timerange-block input {
+    background: #0f172a; color: #e2e8f0; border-color: #334155;
   }
   .timerange-block .tr-tilde { margin: 0 10px; color: #9ca3af; font-weight: 600; }
 
@@ -1916,28 +1917,48 @@ gantt.form_blocks["daterange"] = {
   focus: function(node) {}
 };
 
-// ── 커스텀 컨트롤: 시간 범위 (직접 타이핑 + 피커, 분 단위 자유 입력) ──
+// ── 커스텀 컨트롤: 시간 범위 (텍스트 직접 입력, 24시간제) ──
+// "10:00"뿐 아니라 "1000", "9:30"처럼 쳐도 HH:MM으로 자동 정리한다
+function trNorm(v) {
+  v = (v || "").trim();
+  if (!v) return "";
+  var m = v.match(/^(\d{1,2}):?(\d{2})$/);
+  if (!m) return null;  // 해석 불가
+  var h = +m[1], mi = +m[2];
+  if (h > 23 || mi > 59) return null;
+  return ("0" + h).slice(-2) + ":" + ("0" + mi).slice(-2);
+}
 gantt.form_blocks["timerange"] = {
   render: function(sns) {
     return "<div class='gantt_cal_ltext timerange-block'>" +
-      "<input type='time' class='tr-start'>" +
+      "<input type='text' class='tr-start' placeholder='10:00' maxlength='5' inputmode='numeric'>" +
       "<span class='tr-tilde'>~</span>" +
-      "<input type='time' class='tr-end'></div>";
+      "<input type='text' class='tr-end' placeholder='11:30' maxlength='5' inputmode='numeric'></div>";
   },
   set_value: function(node, value, task) {
     var s = "", e = "";
     if (value) { var p = String(value).split("~"); s = (p[0] || "").trim(); e = (p[1] || "").trim(); }
     node.querySelector(".tr-start").value = s;
     node.querySelector(".tr-end").value = e;
+    if (!node._wired) {
+      node._wired = true;
+      ["tr-start", "tr-end"].forEach(function(cls) {
+        var inp = node.querySelector("." + cls);
+        inp.addEventListener("blur", function() {  // 입력칸을 떠날 때 형식 정리
+          var n = trNorm(inp.value);
+          if (n !== null) inp.value = n;
+        });
+      });
+    }
   },
   get_value: function(node) {
-    var s = node.querySelector(".tr-start").value;
-    var e = node.querySelector(".tr-end").value;
+    var s = trNorm(node.querySelector(".tr-start").value) || "";
+    var e = trNorm(node.querySelector(".tr-end").value) || "";
     if (s && e) return s + "~" + e;
     if (e) return "~" + e;  // 종료만 입력 시 시작으로 둔갑하지 않도록
     return s || "";
   },
-  focus: function(node) {}
+  focus: function(node) { node.querySelector(".tr-start").focus(); }
 };
 
 // ── 커스텀 컨트롤: 색상 견본 선택 (+ 새 색상 추가) ──
