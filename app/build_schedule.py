@@ -1265,6 +1265,18 @@ try {
   });
 } catch(e) {}
 
+// 마우스 휠 = 타임라인 좌우(시간축) 이동, Shift+휠 = 상하
+// (왼쪽 업무 목록 위에서는 기존대로 상하 스크롤)
+document.addEventListener("wheel", function(e) {
+  if (!(e.target.closest && e.target.closest(".gantt_task"))) return;
+  var s = gantt.getScrollState();
+  var d = e.deltaY || 0;
+  if (e.deltaMode === 1) d *= 30;
+  if (e.shiftKey) gantt.scrollTo(s.x, s.y + d);
+  else gantt.scrollTo(s.x + d + (e.deltaX || 0), s.y);
+  e.preventDefault();
+}, { passive: false, capture: true });
+
 // 초기화
 gantt.init("gantt_here");
 

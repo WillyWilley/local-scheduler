@@ -1687,6 +1687,18 @@ document.addEventListener("mousemove", function(e) {
   });
 })();
 
+// ── 마우스 휠 = 타임라인 좌우(시간축) 이동, Shift+휠 = 상하 ──
+// (왼쪽 업무 목록 위에서는 기존대로 상하 스크롤)
+document.addEventListener("wheel", function(e) {
+  if (!(e.target.closest && e.target.closest(".gantt_task"))) return;  // 타임라인 영역만
+  var s = gantt.getScrollState();
+  var d = e.deltaY || 0;
+  if (e.deltaMode === 1) d *= 30;  // 줄 단위 휠 보정
+  if (e.shiftKey) gantt.scrollTo(s.x, s.y + d);
+  else gantt.scrollTo(s.x + d + (e.deltaX || 0), s.y);
+  e.preventDefault();
+}, { passive: false, capture: true });
+
 // 회차 다이아몬드 더블클릭 = 반복 일정 편집 (한 번만 등록)
 document.addEventListener("dblclick", function(e) {
   var dot = e.target.closest && e.target.closest(".recur-dot");
