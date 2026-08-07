@@ -7,6 +7,9 @@
 > 제품 헌장([CLAUDE.md](CLAUDE.md))과 백로그([ROADMAP.md](ROADMAP.md))를 기준으로
 > AI가 스스로 판단·구현·검증하며 발전시키는 "하네스 엔지니어링" 방식으로 개발되었습니다.
 
+**[⬇ 최신 배포본 다운로드 (Windows, 파이썬 불필요)](https://github.com/WillyWilley/local-scheduler/releases/latest)**
+— zip을 받아 압축 풀고 `업무스케줄.exe` 더블클릭
+
 ![업무 스케줄 화면](docs/screenshot.png)
 
 ## 특징
