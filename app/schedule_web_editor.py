@@ -628,9 +628,9 @@ APP_HTML = r'''<!DOCTYPE html>
   }
   /* 빈 격자 칸: 평소엔 비어 있다가 마우스를 올리면 +
      (섹션·지난 일정 행과 이미 메모가 있는 칸은 제외) */
-  /* 일회성·반복 행은 심볼 옆 JS 배지를 쓰므로 칸 hover +를 끈다 (심볼과 겹침 방지) */
-  body.scale-day .gantt_task_row:not(.section-row):not(.section-row-event):not(.section-row-recur):not(.past-group-row):not(.single-event-row):not(.recur-row)
-    .gantt_task_cell:not(.day-note-cell):hover::before {
+  /* 심볼이 놓인 칸(symbol-cell)만 제외 — 심볼 옆 JS 배지가 대신 뜬다 */
+  body.scale-day .gantt_task_row:not(.section-row):not(.section-row-event):not(.section-row-recur):not(.past-group-row)
+    .gantt_task_cell:not(.day-note-cell):not(.symbol-cell):hover::before {
     content: "+"; position: absolute; top: 50%; left: 50%;
     transform: translate(-50%, -50%);
     width: 16px; height: 16px; line-height: 15px; text-align: center;
@@ -1363,7 +1363,13 @@ gantt.templates.timeline_cell_class = function(item, date) {
   if (date.getFullYear() === t.getFullYear() && date.getMonth() === t.getMonth() && date.getDate() === t.getDate()) {
     cls += " today";
   }
-  if (currentScale === "day" && DAY_NOTES[dnKey(isoOf(date), item.id)]) cls += " day-note-cell";
+  if (currentScale === "day") {
+    if (DAY_NOTES[dnKey(isoOf(date), item.id)]) cls += " day-note-cell";
+    // 심볼(다이아몬드)이 놓인 칸 표시 — 이 칸에서는 CSS hover +를 숨긴다 (심볼 옆 JS 배지 사용)
+    if (item.is_single_event && item.type === "milestone" && item.start_date &&
+        isoOf(date) === isoOf(item.start_date)) cls += " symbol-cell";
+    else if (item.is_recur && item.occurrences && item.occurrences.indexOf(isoOf(date)) !== -1) cls += " symbol-cell";
+  }
   return cls;
 };
 
