@@ -628,8 +628,8 @@ APP_HTML = r'''<!DOCTYPE html>
   }
   /* 빈 격자 칸: 평소엔 비어 있다가 마우스를 올리면 +
      (섹션·지난 일정 행과 이미 메모가 있는 칸은 제외) */
-  /* 빈 격자 칸의 + 표시는 JS 배지(dayNotePlus)가 담당한다
-     — 어디서 hover하든 항상 날짜 칸 왼쪽 끝 + / 오른쪽 끝 ✏️ 고정 배치 */
+  /* 격자 칸 hover 표시는 JS 배지 3종(hover-badge)이 담당한다
+     — 어디서 hover하든 항상 날짜 칸 안 [📝][+][✏️] 고정 배치 */
   .day-note-pop {
     position: fixed; z-index: 40; width: 264px; display: none;
     background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
@@ -653,25 +653,22 @@ APP_HTML = r'''<!DOCTYPE html>
   }
   .day-note-pop button.primary { background: #4f46e5; border-color: #4f46e5; color: #fff; }
   .day-note-pop button.danger { color: #dc2626; }
-  /* 막대·심볼 위 hover용 + 배지 (클릭 = 그 날짜 메모 입력) */
-  .day-note-plus {
-    position: fixed; z-index: 38; width: 16px; height: 16px; line-height: 15px;
-    text-align: center; font-size: 13px; font-weight: 700; color: #fff;
-    background: rgba(79, 70, 229, 0.85); border-radius: 50%;
-    cursor: pointer; display: none;
-  }
-  .day-note-plus:hover { transform: scale(1.15); }
-  .day-note-plus.show { display: block; }
-  /* 막대 hover 시 ✏️ 편집 배지 (+ 배지 왼쪽, 클릭 = 편집창) */
-  .bar-edit-btn {
+  /* hover 배지 3종: [📝 메모][+ 일정 추가][✏️ 편집] — 날짜 칸 안 고정 위치 */
+  .hover-badge {
     position: fixed; z-index: 38; width: 18px; height: 18px; line-height: 17px;
-    text-align: center; font-size: 10px; background: #fff;
-    border: 1px solid #c7d2fe; border-radius: 50%;
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18); cursor: pointer; display: none;
+    text-align: center; border-radius: 50%; cursor: pointer; display: none;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
   }
-  .bar-edit-btn:hover { transform: scale(1.15); }
-  .bar-edit-btn.show { display: block; }
-  body.dark .bar-edit-btn { background: #1e293b; border-color: #475569; }
+  .hover-badge:hover { transform: scale(1.15); }
+  .hover-badge.show { display: block; }
+  .badge-memo { font-size: 10px; background: #fef3c7; border: 1px solid #f59e0b; }
+  .badge-add {
+    font-size: 14px; font-weight: 700; color: #fff;
+    background: rgba(79, 70, 229, 0.9); border: 1px solid #4f46e5;
+  }
+  .badge-edit { font-size: 10px; background: #fff; border: 1px solid #c7d2fe; }
+  body.dark .badge-edit { background: #1e293b; border-color: #475569; }
+  body.dark .badge-memo { background: #78350f; border-color: #b45309; }
 
   /* hover 미리보기 툴팁 (클릭 없이 내용 확인, 마우스를 가리지 않도록 통과) */
   .day-note-tip {
@@ -1069,8 +1066,9 @@ APP_HTML = r'''<!DOCTYPE html>
   <div class="dn-tip-title" id="dnTipTitle"></div>
   <div class="dn-tip-text" id="dnTipText"></div>
 </div>
-<div class="day-note-plus" id="dayNotePlus">+</div>
-<div class="bar-edit-btn" id="barEditBtn" title="이 일정 편집 (더블클릭과 동일)">✏️</div>
+<div class="hover-badge badge-memo" id="badgeMemo" title="이 날짜에 메모">📝</div>
+<div class="hover-badge badge-add" id="badgeAdd" title="이 날짜에 새 일정 추가">+</div>
+<div class="hover-badge badge-edit" id="badgeEdit" title="이 일정 편집 (더블클릭과 동일)">✏️</div>
 
 <div id="dlgOverlay">
   <div id="dlgCard">
@@ -1471,13 +1469,16 @@ function dnResolve(e) {
   var itemId2 = dnItemOf(row.getAttribute("task_id"));
   return dnInfo(isoOf(d2), itemId2, !itemId2);          // 격자 칸 = 항목 메모 (섹션이면 무시)
 }
+function dnHideBadges() {
+  ["badgeMemo", "badgeAdd", "badgeEdit"].forEach(function(id) {
+    var b = dnEl(id);
+    if (b) b.classList.remove("show");
+  });
+}
 function dnOpen(iso, anchor, itemId) {
   var tip = dnEl("dayNoteTip");
   if (tip) tip.classList.remove("show");
-  var plus = dnEl("dayNotePlus");
-  if (plus) plus.classList.remove("show");
-  var editBtn = dnEl("barEditBtn");
-  if (editBtn) editBtn.classList.remove("show");
+  dnHideBadges();
   dnCur = dnKey(iso, itemId);
   var d = isoToDate(iso);
   var label = iso + (d ? " (" + gantt.locale.date.day_short[d.getDay()] + ")" : "");
@@ -1547,12 +1548,12 @@ gantt.attachEvent("onTaskClick", function(id, e) {
 });
 
 // 메모가 있는 칸·막대 위에 마우스를 올리면 클릭 없이 내용 툴팁 표시,
-// 메모가 없는 막대 위에서는 + 배지를 그 날짜 칸 가운데에 띄운다
+// 항목 행 위에서는 hover 배지 3종([📝][+][✏️])을 날짜 칸 고정 위치에 띄운다
 // (막대 위에서는 같은 요소 안에서 날짜가 바뀌므로 mousemove로 추적)
 var dnTipKey = null;
-var dnBadgeZone = null;  // 심볼 배지 유지 영역 (배지로 이동하는 동안 사라짐 방지)
+var dnBadgeZone = null;  // 배지 유지 영역 (배지로 이동하는 동안 사라짐 방지)
 document.addEventListener("mousemove", function(e) {
-  var tip = dnEl("dayNoteTip"), plus = dnEl("dayNotePlus");
+  var tip = dnEl("dayNoteTip");
   if (!tip) return;
   var info = dnResolve(e);
   var popOpen = dnEl("dayNotePop").classList.contains("show");
@@ -1570,25 +1571,21 @@ document.addEventListener("mousemove", function(e) {
     tip.style.top  = Math.min(e.clientY + 18, window.innerHeight - tip.offsetHeight - 12) + "px";
   }
 
-  // 막대·심볼 위 배지: [✏️ 편집] [+ 메모]
-  // 막대에 가려진 칸은 CSS hover가 안 먹으므로 직접 표시하고,
-  // 심볼(일회성 다이아몬드·반복 다이아몬드)은 가리지 않도록 왼쪽에 나란히 배치
-  if (!plus) return;
-  var edit = dnEl("barEditBtn");
-  if (edit && (e.target === edit || edit.contains(e.target))) return;   // 배지 위에서는 유지
-  if (e.target === plus || plus.contains(e.target)) return;
-  // 심볼 배지로 마우스를 옮기는 동안(심볼~배지 구간) 배지가 사라지지 않도록 유지
+  // hover 배지 3종: 항목 행 위 어디서 hover하든(빈 칸·막대·심볼) 항상
+  // 그 날짜 칸 안의 같은 자리에 [📝 메모][+ 일정 추가][✏️ 편집]이 뜬다
+  var bMemo = dnEl("badgeMemo"), bAdd = dnEl("badgeAdd"), bEdit = dnEl("badgeEdit");
+  if (!bMemo || !bAdd || !bEdit) return;
+  if ([bMemo, bAdd, bEdit].some(function(b) { return e.target === b || b.contains(e.target); })) return;
+  // 배지로 마우스를 옮기는 동안(칸 범위) 배지가 사라지지 않도록 유지
   if (dnBadgeZone) {
     if (e.clientX >= dnBadgeZone.l && e.clientX <= dnBadgeZone.r &&
         e.clientY >= dnBadgeZone.t && e.clientY <= dnBadgeZone.b) return;
     dnBadgeZone = null;
   }
-  // 단일 규칙: 항목 행 위 어디서 hover하든(빈 칸·막대·심볼) 항상
-  // 그 날짜 칸의 왼쪽 끝에 [+], 오른쪽 끝에 [✏️]가 같은 자리에 뜬다
   var host = (e.target.closest && (e.target.closest(".recur-dot") ||
                                    e.target.closest(".gantt_task_line") ||
                                    e.target.closest(".gantt_task_cell"))) || null;
-  var editTid = null, y = null, cellL = null, cellR = null;
+  var show = false, y = null, cellL = null, cellR = null;
   if (host && info && !info.section && info.itemId && !popOpen) {
     var area = document.querySelector(".gantt_bars_area");
     var d0 = isoToDate(info.iso);
@@ -1600,61 +1597,53 @@ document.addEventListener("mousemove", function(e) {
       cellR = cellL + w;
       var hr = host.getBoundingClientRect();
       y = hr.top + hr.height / 2 - 9;
-      editTid = info.itemId;
+      show = true;
       dnBadgeZone = { l: cellL - 4, r: cellR + 4, t: y - 8, b: y + 26 };
     }
   }
-  if (editTid !== null && !text) {  // 메모 없는 날짜에만 + (있으면 툴팁이 대신 뜬다)
-    plus.dataset.iso = info.iso;
-    plus.dataset.itemId = info.itemId || "";
-    plus.style.left = (cellL + 3) + "px";
-    plus.style.top  = (y + 1) + "px";
-    plus.classList.add("show");
+  if (show) {
+    bMemo.dataset.iso = bAdd.dataset.iso = info.iso;
+    bMemo.dataset.itemId = bEdit.dataset.taskId = bAdd.dataset.itemId = info.itemId;
+    bMemo.style.left = (cellL + 2) + "px";
+    bAdd.style.left  = ((cellL + cellR) / 2 - 9) + "px";
+    bEdit.style.left = (cellR - 20) + "px";
+    [bMemo, bAdd, bEdit].forEach(function(b) {
+      b.style.top = y + "px";
+      b.classList.add("show");
+    });
   } else {
-    plus.classList.remove("show");
-  }
-  if (edit) {
-    if (editTid !== null) {
-      edit.dataset.taskId = editTid;
-      edit.style.left = (cellR - 21) + "px";
-      edit.style.top  = y + "px";
-      edit.classList.add("show");
-    } else {
-      edit.classList.remove("show");
-    }
+    dnHideBadges();
   }
 }, false);
 
-// ✏️ 배지 클릭 = 그 일정의 편집창 열기 (더블클릭과 동일)
+// 배지 클릭 동작: 📝 = 그 항목·그 날짜 메모, + = 그 날짜로 새 일정, ✏️ = 편집창
+var addTaskDate = null;  // + 배지로 새 일정을 만들 때 기본 시작일 (없으면 오늘)
 (function() {
-  var edit = dnEl("barEditBtn");
-  if (!edit) return;
-  edit.addEventListener("click", function(ev) {
+  function prep(ev) {  // 공통: 팝업·타이머·배지 정리
     ev.stopPropagation();
-    var tid = edit.dataset.taskId;
-    edit.classList.remove("show");
-    var p = dnEl("dayNotePlus");
-    if (p) p.classList.remove("show");
-    dnClose();
-    clearTimeout(dnPendingTimer);  // 막대 클릭으로 예약된 메모 팝업 취소
-    dnBadgeZone = null;
-    if (tid && gantt.isTaskExists(tid)) gantt.showLightbox(tid);
-  });
-})();
-// + 배지 클릭 = 그 항목·그 날짜 메모 입력 (막대·심볼 어디서든 동일)
-(function() {
-  var plus = dnEl("dayNotePlus");
-  if (!plus) return;
-  plus.addEventListener("click", function(ev) {
-    ev.stopPropagation();
-    var iso = plus.dataset.iso;
-    var itemId = plus.dataset.itemId || null;
-    plus.classList.remove("show");
-    var eb = dnEl("barEditBtn");
-    if (eb) eb.classList.remove("show");
     clearTimeout(dnPendingTimer);
     dnBadgeZone = null;
-    if (iso) dnOpen(iso, plus, itemId);
+    dnHideBadges();
+  }
+  var bMemo = dnEl("badgeMemo"), bAdd = dnEl("badgeAdd"), bEdit = dnEl("badgeEdit");
+  if (bMemo) bMemo.addEventListener("click", function(ev) {
+    prep(ev);
+    if (bMemo.dataset.iso) dnOpen(bMemo.dataset.iso, bMemo, bMemo.dataset.itemId || null);
+  });
+  if (bAdd) bAdd.addEventListener("click", function(ev) {
+    prep(ev);
+    dnClose();
+    var tid = bAdd.dataset.itemId;
+    if (!tid || !gantt.isTaskExists(tid)) return;
+    var t = gantt.getTask(tid);
+    addTaskDate = bAdd.dataset.iso;  // onTaskCreated가 이 날짜를 기본 시작일로 쓴다
+    gantt.createTask({}, String(t.parent), gantt.getTaskIndex(tid) + 1);
+  });
+  if (bEdit) bEdit.addEventListener("click", function(ev) {
+    prep(ev);
+    dnClose();
+    var tid = bEdit.dataset.taskId;
+    if (tid && gantt.isTaskExists(tid)) gantt.showLightbox(tid);
   });
 })();
 
@@ -2346,8 +2335,10 @@ gantt.attachEvent("onTaskCreated", function(task) {
   var pid = task.parent;
   if (!pid || pid == 0) { gantt.message({ type: "error", text: "섹션 안의 + 버튼으로 추가해주세요" }); return false; }
   var p = gantt.getTask(pid);
-  // 기본 날짜: 오늘 하루
-  var d0 = new Date(); d0.setHours(0, 0, 0, 0);
+  // 기본 날짜: + 배지로 고른 날짜가 있으면 그 날, 없으면 오늘 하루
+  var d0 = (addTaskDate && isoToDate(addTaskDate)) || new Date();
+  addTaskDate = null;
+  d0.setHours(0, 0, 0, 0);
   var d1 = new Date(d0); d1.setDate(d1.getDate() + 1);
   task.start_date = d0;
   task.end_date = d1;
